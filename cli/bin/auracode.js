@@ -13,7 +13,7 @@ const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.2.0" };
+const PKG = { version: "0.4.0" };
 
 const ART = `
  █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗
@@ -180,12 +180,12 @@ const TOOLS = {
   },
   write_file: {
     desc: "Écris un fichier (demande confirmation). Args: {path, content}",
-    run: async ({ path: p, content }, rl) => {
+    run: async ({ path: p, content }, ui) => {
       const abs = inside(p);
-      console.log(`\n--- Aperçu de ${p} (${(content || "").length} caractères) ---`);
-      console.log(String(content || "").slice(0, 1500));
-      console.log("--- fin aperçu ---");
-      if (!(await ask(rl, "Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
+      ui.sys(`--- Aperçu de ${p} (${(content || "").length} caractères) ---`);
+      ui.sys(String(content || "").slice(0, 1500));
+      ui.sys("--- fin aperçu ---");
+      if (!(await ui.confirm("Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content || "");
       return "Fichier écrit : " + p;
@@ -193,9 +193,9 @@ const TOOLS = {
   },
   exec: {
     desc: "Exécute une commande shell (demande confirmation). Args: {cmd}",
-    run: (args, rl) => new Promise(async (resolve) => {
-      console.log("\n$ " + args.cmd);
-      if (!(await ask(rl, "Exécuter ?"))) return resolve("Annulé par l'utilisateur.");
+    run: (args, ui) => new Promise(async (resolve) => {
+      ui.sys("$ " + args.cmd);
+      if (!(await ui.confirm("Exécuter ?"))) return resolve("Annulé par l'utilisateur.");
       exec(args.cmd, { cwd: process.cwd(), timeout: 60000, maxBuffer: 1024 * 500 }, (err, stdout, stderr) => {
         let out = (stdout || "") + (stderr ? "\n[stderr]\n" + stderr : "");
         if (err && !out) out = "Erreur: " + err.message;
@@ -246,44 +246,71 @@ function extractTool(text) {
   catch { return { name: m[1], args: {}, _raw: m[2] }; }
 }
 
-async function agentTurn(prompt, key, model, effort, rl) {
+// Chronomètre de réflexion (onTick reçoit les secondes, ou null à la fin).
+async function timedCall(fn, onTick) {
+  const start = Date.now();
+  const timer = setInterval(() => {
+    if (onTick) onTick((Date.now() - start) / 1000);
+  }, 150);
+  try {
+    const data = await fn();
+    return { data, elapsed: (Date.now() - start) / 1000 };
+  } finally {
+    clearInterval(timer);
+    if (onTick) onTick(null);
+  }
+}
+
+async function agentTurn(prompt, key, model, effort, ui) {
   let sessionId = getSessionId();
   const callChat = async (sid, hist) =>
     api("/api/chat", { message: prompt, session_id: sid, model, effort, history: hist }, key);
 
   if (!sessionId) sessionId = await newSession(key, model);
   const history = [];
+  let totalTime = 0;
   for (let step = 0; step < 12; step++) {
     let data;
+    const runOnce = async (sid) => {
+      const r = await timedCall(
+        () => callChat(sid, history),
+        (sec) => ui.thinking(sec)
+      );
+      totalTime += r.elapsed;
+      return r.data;
+    };
     try {
-      data = await callChat(sessionId, history);
+      data = await runOnce(sessionId);
     } catch (e) {
       if (e.status === 404 && /session/i.test(e.message)) {
         sessionId = await newSession(key, model);
-        data = await callChat(sessionId, history);
+        data = await runOnce(sessionId);
       } else throw e;
+    } finally {
+      ui.thinking(null);
     }
     const reply = data.reply || "";
     const tool = extractTool(reply);
     if (!tool) {
-      console.log("\n" + reply.trim() + "\n");
+      ui.assistant(reply.trim());
+      ui.sys(`réfléchi en ${totalTime.toFixed(1)}s`, true);
       return;
     }
     if (!TOOLS[tool.name]) {
       history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
       prompt = `Outil inconnu "${tool.name}". Outils valides : ${Object.keys(TOOLS).join(", ")}. Continue.`;
-      console.log(`(outil inconnu : ${tool.name}, je demande autre chose...)`);
+      ui.sys(`outil inconnu : ${tool.name}, je demande autre chose...`, true);
       continue;
     }
-    console.log(`\n[AuraCode exécute : ${tool.name}]`);
+    ui.sys(`AuraCode exécute : ${tool.name}`, true);
     let result;
-    try { result = await TOOLS[tool.name].run(tool.args || {}, rl); }
+    try { result = await TOOLS[tool.name].run(tool.args || {}, ui); }
     catch (e) { result = "Erreur outil : " + e.message; }
-    console.log(result.slice(0, 500) + "\n");
+    ui.sys((result || "").slice(0, 400));
     history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
     prompt = `Résultat de ${tool.name} :\n${result}\nContinue ta tâche (une action à la fois, ou réponds sans bloc outil si terminé).`;
   }
-  console.log("\n(Limite de 12 étapes atteinte.)\n");
+  ui.sys(`réfléchi en ${totalTime.toFixed(1)}s — limite de 12 étapes atteinte.`, true);
 }
 
 // Menu fléché pastel (choix au clavier)
@@ -355,22 +382,22 @@ async function cmdSetup() {
     cfg.apiKey = key; saveJson(CONFIG_FILE, cfg);
   }
 
-  // 2. Modèle
+  // 2. Modèle (avec stats visibles)
   console.log("");
   const model = await choose("Étape 2/3 — Choisis ton modèle", [
-    { value: "aura-1.1", label: "Aura 1.1", desc: "rapide, idéal au quotidien" },
-    { value: "aura-1.2", label: "Aura 1.2", desc: "premium, le plus malin (coût x4)" },
-    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "spécialiste programmation" },
+    { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
+    { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
+    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
   ]);
   if (!model) { console.log("Annulé."); rl.close(); return; }
 
-  // 3. Effort
+  // 3. Effort (avec temps et coût visibles)
   console.log("");
   const effort = (await choose("Étape 3/3 — Niveau de réflexion", [
-    { value: "low", label: "Low", desc: "réponses courtes et rapides" },
-    { value: "middle", label: "Middle", desc: "équilibré (recommandé)" },
-    { value: "high", label: "High", desc: "détaillé" },
-    { value: "xhigh", label: "XHigh", desc: "réflexion maximale" },
+    { value: "low", label: "Low", desc: "~5-10s • 256 tokens • coût x1 • réponses courtes" },
+    { value: "middle", label: "Middle", desc: "~15-30s • 512 tokens • coût x1 • équilibré" },
+    { value: "high", label: "High", desc: "~1-2 min • 1024 tokens • coût x1.5 • détaillé" },
+    { value: "xhigh", label: "XHigh", desc: "~2-4 min • 1536 tokens • coût x2 • réflexion maximale" },
   ])) || "middle";
 
   const cfg = loadJson(CONFIG_FILE, {});
@@ -393,11 +420,445 @@ async function cmdSetup() {
   ]);
 }
 
+// ---------- Commandes slash (avec autocomplétion) ----------
+const COMMANDS = [
+  { name: "/new", desc: "Nouvelle conversation" },
+  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.1-code"] },
+  { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
+  { name: "/quota", desc: "Afficher ton quota global" },
+  { name: "/image", desc: "Générer une image : /image <texte>" },
+  { name: "/clear", desc: "Effacer l'écran" },
+  { name: "/help", desc: "Aide" },
+  { name: "/exit", desc: "Quitter" },
+];
+
+function wrapText(text, width) {
+  const out = [];
+  for (const para of String(text).split("\n")) {
+    if (para === "") { out.push(""); continue; }
+    let line = para;
+    while (line.length > width) {
+      let cut = line.lastIndexOf(" ", width);
+      if (cut <= 0) cut = width;
+      out.push(line.slice(0, cut));
+      line = line.slice(cut).replace(/^ +/, "");
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// ---------- Écran plein terminal ----------
+class Screen {
+  constructor(state) {
+    this.state = state;
+    this.W = 80; this.H = 24;
+    this.messages = [];
+    this.input = "";
+    this.cursor = 0;
+    this.offset = 0;
+    this.scroll = 0;
+    this.stuck = true;
+    this.completion = null;
+    this.confirmState = null;
+    this.busy = false;
+    this.thinkSec = null;
+    this.quotaText = "";
+    this.hist = [];
+    this.histIdx = -1;
+    this.draft = "";
+    this.done = null;
+    this.onLine = null;
+    this.boundKey = null;
+    this.boundResize = null;
+  }
+
+  start() {
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    this.boundKey = (s, k) => this.handleKey(s || "", k || {});
+    process.stdin.on("keypress", this.boundKey);
+    this.boundResize = () => this.render();
+    process.stdout.on("resize", this.boundResize);
+    process.stdout.write("\x1b[?1049h");
+    this.render();
+  }
+
+  stop() {
+    try {
+      process.stdout.write("\x1b[?25h");
+      if (this.boundKey) process.stdin.removeListener("keypress", this.boundKey);
+      if (this.boundResize) process.stdout.removeListener("resize", this.boundResize);
+      if (process.stdin.isTTY) process.stdin.setRawMode(false);
+      process.stdout.write("\x1b[?1049l");
+      process.stdin.pause();
+    } catch { /* ignore */ }
+  }
+
+  loop() {
+    return new Promise((resolve) => { this.done = resolve; });
+  }
+
+  quit() {
+    const d = this.done;
+    this.done = null;
+    this.stop();
+    if (d) d();
+  }
+
+  sys(text, dim) {
+    this.messages.push({ role: "system", text: String(text), dim: !!dim });
+    if (this.messages.length > 300) this.messages.splice(0, this.messages.length - 300);
+    this.render();
+  }
+
+  assistant(text) {
+    this.messages.push({ role: "assistant", text: String(text) });
+    if (this.messages.length > 300) this.messages.splice(0, this.messages.length - 300);
+    this.render();
+  }
+
+  thinking(sec) {
+    this.thinkSec = sec;
+    this.render();
+  }
+
+  confirm(q) {
+    return new Promise((resolve) => {
+      this.confirmState = { q: String(q), resolve };
+      this.render();
+    });
+  }
+
+  resolveConfirm(v) {
+    const r = this.confirmState && this.confirmState.resolve;
+    this.confirmState = null;
+    this.render();
+    if (r) r(v);
+  }
+
+  async refreshQuota() {
+    try {
+      const sid = getSessionId();
+      if (!sid) { this.quotaText = ""; return; }
+      const q = await api("/api/quota/" + sid, null, this.state.key, "GET");
+      this.quotaText = `Tokens ${q.tokens_remaining}/${q.token_limit}`;
+    } catch { this.quotaText = ""; }
+  }
+
+  render() {
+    this.W = process.stdout.columns || 80;
+    this.H = process.stdout.rows || 24;
+    const W = this.W, H = this.H;
+    const compItems = this.completion ? this.completion.items.slice(0, 6) : [];
+    const compH = compItems.length;
+    const viewH = Math.max(3, H - 3 - compH);
+
+    const msgW = Math.max(20, W - 6);
+    const lines = [];
+    for (const m of this.messages) {
+      const color = m.role === "user" ? P.sky : m.role === "assistant" ? "" : P.dim;
+      const mark = m.role === "user" ? "> " : m.role === "assistant" ? "~ " : "· ";
+      const wrapped = wrapText(m.text, msgW);
+      wrapped.forEach((wl, i) => lines.push({ pre: i === 0 ? mark : "  ", color, text: wl }));
+    }
+    const total = lines.length;
+    const maxScroll = Math.max(0, total - viewH);
+    if (this.stuck) this.scroll = 0;
+    if (this.scroll > maxScroll) this.scroll = maxScroll;
+    const start = Math.max(0, total - viewH - this.scroll);
+    const visible = lines.slice(start, start + viewH);
+    while (visible.length < viewH) visible.unshift(null);
+
+    let rawL = `◆ AuraCode  ${this.state.model} • ${this.state.effort}`;
+    if (rawL.length > W) rawL = rawL.slice(0, W);
+    const rawR = this.quotaText;
+    const header = P.dim + rawL + " ".repeat(Math.max(1, W - rawL.length - rawR.length)) + rawR + P.reset;
+
+    let out = "\x1b[?25l\x1b[H";
+    out += header + "\x1b[K\n";
+    for (const l of visible) {
+      out += l ? l.color + l.pre + P.reset + l.text : "";
+      out += "\x1b[K\n";
+    }
+    compItems.forEach((it, i) => {
+      const sel = i === this.completion.sel;
+      out += (sel ? P.bold + P.lemon + "> " + it.display + P.reset : P.dim + "  " + it.display + P.reset) + "\x1b[K\n";
+    });
+
+    let cursorCol = -1;
+    if (this.confirmState) {
+      out += P.lemon + this.confirmState.q + P.reset + " [o/N] " + "\x1b[K\n";
+    } else {
+      const fieldW = W - 2;
+      if (this.cursor < this.offset) this.offset = this.cursor;
+      if (this.cursor - this.offset >= fieldW) this.offset = this.cursor - fieldW + 1;
+      if (this.offset < 0) this.offset = 0;
+      out += P.bold + "> " + P.reset + this.input.slice(this.offset, this.offset + fieldW) + "\x1b[K\n";
+      cursorCol = 2 + (this.cursor - this.offset);
+    }
+
+    let sL, sR = "";
+    if (this.busy && this.thinkSec !== null && this.thinkSec !== undefined) {
+      sL = `Aura réfléchit... ${this.thinkSec.toFixed(0)}s`;
+    } else if (this.busy) {
+      sL = "Travail en cours...";
+    } else {
+      sL = "/ = commandes • PgUp/PgDn = défiler • Ctrl+C = quitter";
+    }
+    if (this.scroll > 0) sR = "PgDn : bas";
+    let sLine = sL;
+    if (sR) sLine += " ".repeat(Math.max(1, W - sL.length - sR.length)) + sR;
+    if (sLine.length > W) sLine = sLine.slice(0, W);
+    out += P.dim + sLine + P.reset;
+    process.stdout.write(out);
+
+    if (cursorCol >= 0) {
+      const inputRow = 1 + viewH + compH + 1;
+      process.stdout.write(`\x1b[${inputRow + 1};${cursorCol + 1}H\x1b[?25h`);
+    }
+  }
+
+  updateCompletion() {
+    const m1 = /^\/([a-z]*)$/.exec(this.input);
+    if (m1) {
+      const items = COMMANDS
+        .filter((c) => c.name.startsWith("/" + m1[1]))
+        .map((c) => ({ insert: c.name + " ", display: `${c.name}  —  ${c.desc}` }));
+      this.completion = items.length ? { items, sel: 0 } : null;
+      return;
+    }
+    const m2 = /^\/(\w+)\s+(\S*)$/.exec(this.input);
+    if (m2) {
+      const cmd = COMMANDS.find((c) => c.name === "/" + m2[1]);
+      if (cmd && cmd.values) {
+        const items = cmd.values
+          .filter((v) => v.startsWith(m2[2]))
+          .map((v) => ({ insert: `/${m2[1]} ${v}`, display: v }));
+        this.completion = items.length ? { items, sel: 0 } : null;
+        return;
+      }
+    }
+    this.completion = null;
+  }
+
+  acceptCompletion() {
+    if (!this.completion || !this.completion.items.length) return false;
+    const it = this.completion.items[Math.min(this.completion.sel, this.completion.items.length - 1)];
+    this.input = it.insert;
+    this.cursor = this.input.length;
+    this.updateCompletion();
+    this.render();
+    return true;
+  }
+
+  onEdit() {
+    this.updateCompletion();
+    this.render();
+  }
+
+  histPrev() {
+    if (!this.hist.length) return;
+    if (this.histIdx === -1) { this.draft = this.input; this.histIdx = this.hist.length - 1; }
+    else if (this.histIdx > 0) this.histIdx--;
+    this.input = this.hist[this.histIdx];
+    this.cursor = this.input.length;
+    this.onEdit();
+  }
+
+  histNext() {
+    if (this.histIdx === -1) return;
+    if (this.histIdx >= this.hist.length - 1) { this.histIdx = -1; this.input = this.draft; }
+    else { this.histIdx++; this.input = this.hist[this.histIdx]; }
+    this.cursor = this.input.length;
+    this.onEdit();
+  }
+
+  submit() {
+    const line = this.input.trim();
+    this.completion = null;
+    if (!line) { this.render(); return; }
+    if (this.hist[this.hist.length - 1] !== line) this.hist.push(line);
+    if (this.hist.length > 100) this.hist.shift();
+    this.histIdx = -1;
+    this.input = "";
+    this.cursor = 0;
+    this.offset = 0;
+    this.stuck = true;
+    this.scroll = 0;
+    this.render();
+    if (this.onLine) this.onLine(line);
+  }
+
+  handleKey(str, key) {
+    if (key.ctrl && (key.name === "c" || key.name === "d")) { this.quit(); return; }
+    if (key.name === "pageup") { this.stuck = false; this.scroll += 5; this.render(); return; }
+    if (key.name === "pagedown") { this.stuck = false; this.scroll = Math.max(0, this.scroll - 5); this.render(); return; }
+    if (this.busy) return;
+    if (this.confirmState) {
+      const c = (str || "").toLowerCase();
+      if (c === "y" || c === "o") this.resolveConfirm(true);
+      else if (c === "n" || key.name === "escape" || key.name === "return") this.resolveConfirm(false);
+      return;
+    }
+    switch (key.name) {
+      case "return": this.submit(); return;
+      case "backspace":
+        if (this.cursor > 0) {
+          this.input = this.input.slice(0, this.cursor - 1) + this.input.slice(this.cursor);
+          this.cursor--;
+          this.onEdit();
+        }
+        return;
+      case "delete":
+        this.input = this.input.slice(0, this.cursor) + this.input.slice(this.cursor + 1);
+        this.onEdit();
+        return;
+      case "left": if (this.cursor > 0) this.cursor--; this.render(); return;
+      case "right": if (this.cursor < this.input.length) this.cursor++; this.render(); return;
+      case "home": this.cursor = 0; this.render(); return;
+      case "end": this.cursor = this.input.length; this.render(); return;
+      case "up":
+        if (this.completion) {
+          const n = this.completion.items.length;
+          this.completion.sel = (this.completion.sel - 1 + n) % n;
+          this.render();
+          return;
+        }
+        this.histPrev();
+        return;
+      case "down":
+        if (this.completion) {
+          this.completion.sel = (this.completion.sel + 1) % this.completion.items.length;
+          this.render();
+          return;
+        }
+        this.histNext();
+        return;
+      case "tab": this.acceptCompletion(); return;
+      case "escape":
+        if (this.completion) { this.completion = null; this.render(); }
+        else if (this.input) { this.input = ""; this.cursor = 0; this.render(); }
+        return;
+    }
+    if (str && str.length === 1 && !key.ctrl && !key.meta) {
+      this.input = this.input.slice(0, this.cursor) + str + this.input.slice(this.cursor);
+      this.cursor += str.length;
+      this.onEdit();
+    }
+  }
+}
+
+async function runTUI(state) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.log("Terminal interactif requis pour le mode plein écran.");
+    process.exit(1);
+  }
+  const screen = new Screen(state);
+
+  screen.onLine = async (line) => {
+    if (line.startsWith("/")) {
+      const [cmd, ...rest] = line.slice(1).split(" ");
+      const arg = rest.join(" ").trim();
+      const MODELS = ["aura-1.1", "aura-1.2", "aura-1.1-code"];
+      const EFFORTS = ["low", "middle", "high", "xhigh"];
+      const saveCfg = () => saveJson(CONFIG_FILE, {
+        apiKey: state.key, model: state.model, effort: state.effort,
+      });
+      switch (cmd) {
+        case "exit": case "quit": case "q": screen.quit(); return;
+        case "help":
+          screen.sys("Commandes :");
+          COMMANDS.forEach((c) => screen.sys(`  ${c.name} — ${c.desc}`));
+          return;
+        case "clear": screen.messages = []; screen.render(); return;
+        case "new":
+          try {
+            const id = await newSession(state.key, state.model);
+            screen.sys("Nouvelle conversation : " + id);
+            await screen.refreshQuota();
+            screen.render();
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        case "model":
+          if (!arg) { screen.sys("Modèle actuel : " + state.model + " (valides : " + MODELS.join(", ") + ")"); return; }
+          if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
+          state.model = arg; saveCfg();
+          screen.sys("Modèle : " + arg);
+          screen.render();
+          return;
+        case "effort":
+          if (!arg) { screen.sys("Effort actuel : " + state.effort + " (valides : " + EFFORTS.join(", ") + ")"); return; }
+          if (!EFFORTS.includes(arg)) { screen.sys("Effort inconnu. Valides : " + EFFORTS.join(", ")); return; }
+          state.effort = arg; saveCfg();
+          screen.sys("Effort : " + arg);
+          screen.render();
+          return;
+        case "quota": {
+          const sid = getSessionId();
+          if (!sid) { screen.sys("Aucune conversation active."); return; }
+          try {
+            const q = await api("/api/quota/" + sid, null, state.key, "GET");
+            screen.sys(`Tokens ${q.tokens_remaining}/${q.token_limit}` + (q.locked ? ` — verrouillé ~${q.retry_after_min} min` : ""));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "image": {
+          if (!arg) { screen.sys("Usage : /image <description>"); return; }
+          let sid = getSessionId();
+          screen.busy = true;
+          try {
+            if (!sid) sid = await newSession(state.key, state.model);
+            screen.sys("Génération de l'image...");
+            const d = await api("/api/image", { prompt: arg, session_id: sid }, state.key);
+            screen.assistant(`![image](${d.image_url})`);
+            await screen.refreshQuota();
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false;
+          screen.render();
+          return;
+        }
+        default:
+          screen.sys("Commande inconnue, /help pour la liste.");
+          return;
+      }
+    }
+    screen.messages.push({ role: "user", text: line });
+    screen.busy = true;
+    screen.render();
+    const ui = {
+      sys: (t, dim) => screen.sys(t),
+      assistant: (t) => screen.assistant(t),
+      thinking: (s) => screen.thinking(s),
+      confirm: (q) => screen.confirm(q),
+    };
+    try {
+      await agentTurn(line, state.key, state.model, state.effort, ui);
+    } catch (e) {
+      const d = e.data || {};
+      screen.sys(d.quota_exceeded ? (d.error || "Quota épuisé.") : `Erreur (${e.status || "?"}) : ${e.message}`);
+    }
+    screen.busy = false;
+    await screen.refreshQuota();
+    screen.render();
+  };
+
+  screen.start();
+  screen.sys(`Modèle ${state.model} • effort ${state.effort} • dossier ${process.cwd()}`);
+  screen.sys("Tape / pour voir les commandes. Les réponses s'affichent ici en direct.");
+  screen.busy = true;
+  await screen.refreshQuota();
+  screen.busy = false;
+  screen.render();
+  await screen.loop();
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n`);
+    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  Plein écran : /new /model /effort /quota /image /clear /help (/ = suggestions)\n`);
     return;
   }
   let model = "aura-1.1-code", effort = "high";
@@ -460,8 +921,22 @@ async function main() {
     console.log("Erreur API (" + (e.status || "?") + ") : " + e.message);
     return;
   }
-  console.log(`Modèle ${model} • effort ${effort} • dossier ${process.cwd()}`);
-  console.log("Écris ta demande (exit pour quitter, /new = nouvelle conversation).\n");
+  // ---------- Mode plein écran ----------
+  const state = { key, model, effort };
+  await runTUI(state);
+  return;
+
+  /* --- Ancien mode ligne (conservé, inactif) ---
+  console.log(`Modèle ${pastel("lemon", model)} • effort ${pastel("lemon", effort)} • dossier ${process.cwd()}`);
+  console.log("Écris ta demande (exit pour quitter, /help pour les commandes).\n");
+
+  const MODELS = ["aura-1.1", "aura-1.2", "aura-1.1-code"];
+  const EFFORTS = ["low", "middle", "high", "xhigh"];
+  const saveCfg = (patch) => {
+    const cfg = loadJson(CONFIG_FILE, {});
+    Object.assign(cfg, patch);
+    saveJson(CONFIG_FILE, cfg);
+  };
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const askPrompt = () => new Promise((res) => rl.question("> ", res));
@@ -469,9 +944,75 @@ async function main() {
     const line = (await askPrompt()).trim();
     if (!line) continue;
     if (/^(exit|quit|q)$/i.test(line)) break;
+    if (line === "/help") {
+      console.log(`
+Commandes :
+  /new              Nouvelle conversation
+  /model [X]        Voir/Changer de modèle (aura-1.1, aura-1.2, aura-1.1-code)
+  /effort [X]       Voir/Changer l'effort (low, middle, high, xhigh)
+  /quota            Afficher ton quota global
+  /image <texte>    Générer une image
+  exit              Quitter
+`);
+      continue;
+    }
     if (line === "/new") {
       try { console.log("Nouvelle conversation : " + await newSession(key, model)); }
       catch (e) { console.log("Erreur : " + e.message); }
+      continue;
+    }
+    if (line === "/model" || line.startsWith("/model ")) {
+      const arg = line.slice(6).trim();
+      if (!arg) {
+        const m = await choose("Choisis ton modèle", [
+          { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1" },
+          { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4" },
+          { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2" },
+        ]);
+        if (m) { model = m; saveCfg({ model: m }); console.log("Modèle : " + pastel("lemon", model)); }
+        continue;
+      }
+      if (!MODELS.includes(arg)) { console.log("Modèle inconnu. Valides : " + MODELS.join(", ")); continue; }
+      model = arg; saveCfg({ model: arg });
+      console.log("Modèle : " + pastel("lemon", model));
+      continue;
+    }
+    if (line === "/effort" || line.startsWith("/effort ")) {
+      const arg = line.slice(7).trim();
+      if (!arg) {
+        const m = await choose("Niveau de réflexion", [
+          { value: "low", label: "Low", desc: "~5-10s • 256 tokens • coût x1" },
+          { value: "middle", label: "Middle", desc: "~15-30s • 512 tokens • coût x1" },
+          { value: "high", label: "High", desc: "~1-2 min • 1024 tokens • coût x1.5" },
+          { value: "xhigh", label: "XHigh", desc: "~2-4 min • 1536 tokens • coût x2" },
+        ]);
+        if (m) { effort = m; saveCfg({ effort: m }); console.log("Effort : " + pastel("lemon", effort)); }
+        continue;
+      }
+      if (!EFFORTS.includes(arg)) { console.log("Effort inconnu. Valides : " + EFFORTS.join(", ")); continue; }
+      effort = arg; saveCfg({ effort: arg });
+      console.log("Effort : " + pastel("lemon", effort));
+      continue;
+    }
+    if (line === "/quota") {
+      const sid = getSessionId();
+      if (!sid) { console.log("Aucune conversation active."); continue; }
+      try {
+        const q = await api("/api/quota/" + sid, null, key, "GET");
+        console.log(`Tokens ${q.tokens_remaining}/${q.token_limit}` + (q.locked ? ` — verrouillé ~${q.retry_after_min} min` : ""));
+      } catch (e) { console.log("Erreur : " + e.message); }
+      continue;
+    }
+    if (line === "/image" || line.startsWith("/image ")) {
+      let prompt = line.slice(6).trim();
+      if (!prompt) prompt = (await new Promise((res) => rl.question("Décris l'image : ", res))).trim();
+      if (!prompt) continue;
+      let sid = getSessionId();
+      try {
+        if (!sid) sid = await newSession(key, model);
+        const d = await api("/api/image", { prompt, session_id: sid }, key);
+        console.log("Image : " + d.image_url);
+      } catch (e) { console.log("Erreur : " + e.message); }
       continue;
     }
     try { await agentTurn(line, key, model, effort, rl); }
@@ -482,6 +1023,7 @@ async function main() {
     }
   }
   rl.close();
+  */
 }
 
 main().catch((e) => { console.error("Erreur fatale :", e.message); process.exit(1); });
