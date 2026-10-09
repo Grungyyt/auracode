@@ -558,7 +558,7 @@ class Screen {
     const msgW = Math.max(20, W - 6);
     const lines = [];
     for (const m of this.messages) {
-      const color = m.role === "user" ? P.sky : m.role === "assistant" ? "" : P.dim;
+      const color = m.role === "user" ? P.sky : m.role === "assistant" ? P.mint : P.dim;
       const mark = m.role === "user" ? "> " : m.role === "assistant" ? "~ " : "· ";
       const wrapped = wrapText(m.text, msgW);
       wrapped.forEach((wl, i) => lines.push({ pre: i === 0 ? mark : "  ", color, text: wl }));
@@ -574,7 +574,10 @@ class Screen {
     let rawL = `◆ AuraCode  ${this.state.model} • ${this.state.effort}`;
     if (rawL.length > W) rawL = rawL.slice(0, W);
     const rawR = this.quotaText;
-    const header = P.dim + rawL + " ".repeat(Math.max(1, W - rawL.length - rawR.length)) + rawR + P.reset;
+    const pad = " ".repeat(Math.max(1, W - rawL.length - rawR.length));
+    const hTitle = P.bold + P.pink + "◆ AuraCode" + P.reset;
+    const hMid = P.lavender + rawL.slice("◆ AuraCode".length) + P.reset;
+    const header = hTitle + hMid + pad + P.mint + rawR + P.reset;
 
     let out = "\x1b[?25l\x1b[H";
     out += header + "\x1b[K\n";
@@ -584,7 +587,7 @@ class Screen {
     }
     compItems.forEach((it, i) => {
       const sel = i === this.completion.sel;
-      out += (sel ? P.bold + P.lemon + "> " + it.display + P.reset : P.dim + "  " + it.display + P.reset) + "\x1b[K\n";
+      out += (sel ? P.bold + P.pink + "> " + P.lemon + it.display + P.reset : P.dim + "  " + it.display + P.reset) + "\x1b[K\n";
     });
 
     let cursorCol = -1;
@@ -595,7 +598,7 @@ class Screen {
       if (this.cursor < this.offset) this.offset = this.cursor;
       if (this.cursor - this.offset >= fieldW) this.offset = this.cursor - fieldW + 1;
       if (this.offset < 0) this.offset = 0;
-      out += P.bold + "> " + P.reset + this.input.slice(this.offset, this.offset + fieldW) + "\x1b[K\n";
+      out += P.bold + P.pink + "> " + P.reset + this.input.slice(this.offset, this.offset + fieldW) + "\x1b[K\n";
       cursorCol = 2 + (this.cursor - this.offset);
     }
 
@@ -611,7 +614,8 @@ class Screen {
     let sLine = sL;
     if (sR) sLine += " ".repeat(Math.max(1, W - sL.length - sR.length)) + sR;
     if (sLine.length > W) sLine = sLine.slice(0, W);
-    out += P.dim + sLine + P.reset;
+    const thinking = this.busy && this.thinkSec !== null && this.thinkSec !== undefined;
+    out += (thinking ? P.lavender : P.dim) + sLine + P.reset;
     process.stdout.write(out);
 
     if (cursorCol >= 0) {
