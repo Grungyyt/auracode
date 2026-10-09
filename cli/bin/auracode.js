@@ -13,7 +13,7 @@ const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.1.1" };
+const PKG = { version: "0.2.0" };
 
 const ART = `
  █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗
@@ -26,6 +26,29 @@ const ART = `
 `;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- Palette pastel ----------
+const P = {
+  reset: "\x1b[0m",
+  pink: "\x1b[38;2;255;179;199m",
+  mint: "\x1b[38;2;150;230;190m",
+  lavender: "\x1b[38;2;190;190;235m",
+  peach: "\x1b[38;2;255;200;150m",
+  sky: "\x1b[38;2;160;210;250m",
+  lemon: "\x1b[38;2;255;240;170m",
+  dim: "\x1b[38;2;170;170;180m",
+  bold: "\x1b[1m",
+};
+const pastel = (color, s) => P[color] + s + P.reset;
+function pastelBox(title, lines) {
+  const width = 58;
+  const bar = P.lavender + "─".repeat(width) + P.reset;
+  console.log(bar);
+  console.log(P.bold + P.pink + "  " + title + P.reset);
+  console.log(bar);
+  (lines || []).forEach((l) => console.log("  " + l));
+  console.log(bar);
+}
 
 function loadJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, "utf8")); }
@@ -108,11 +131,11 @@ async function selfUpdate() {
   setTimeout(() => process.exit(0), 600);
 }
 
-async function api(pathname, body, key) {
+async function api(pathname, body, key, method = "POST") {
   const res = await fetch(API + pathname, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify(body),
+    ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -263,14 +286,126 @@ async function agentTurn(prompt, key, model, effort, rl) {
   console.log("\n(Limite de 12 étapes atteinte.)\n");
 }
 
+// Menu fléché pastel (choix au clavier)
+function choose(prompt, options) {
+  const pickNumbered = () => new Promise((resolve) => {
+    console.log(pastel("lavender", "◆ " + prompt));
+    options.forEach((o, i) => console.log(`  ${i + 1}. ${o.label}${o.desc ? "  —  " + o.desc : ""}`));
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("Numéro : ", (a) => {
+      rl.close();
+      const n = parseInt(a.trim(), 10);
+      resolve(n >= 1 && n <= options.length ? options[n - 1].value : null);
+    });
+  });
+  if (!process.stdin.isTTY) return pickNumbered();
+  return new Promise((resolve) => {
+    let idx = 0;
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    const render = () => {
+      console.clear();
+      console.log(P.bold + P.lavender + "◆ " + prompt + P.reset + "\n");
+      options.forEach((o, i) => {
+        const active = i === idx;
+        const prefix = active ? pastel("pink", "❯ ") : "  ";
+        const name = active ? P.bold + P.lemon + o.label + P.reset : P.dim + o.label + P.reset;
+        console.log(prefix + name + (o.desc ? P.dim + "  —  " + o.desc + P.reset : ""));
+      });
+      console.log("\n" + P.dim + "↑↓ naviguer • Entrée valider • Échap annuler" + P.reset);
+    };
+    const cleanup = () => {
+      process.stdin.removeListener("keypress", onKey);
+      if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    };
+    const onKey = (str, key) => {
+      if (key.name === "up") { idx = (idx - 1 + options.length) % options.length; render(); }
+      else if (key.name === "down") { idx = (idx + 1) % options.length; render(); }
+      else if (key.name === "return") { cleanup(); console.clear(); resolve(options[idx].value); }
+      else if (key.name === "escape" || (key.ctrl && key.name === "c")) { cleanup(); console.clear(); resolve(null); }
+    };
+    process.stdin.on("keypress", onKey);
+    render();
+  });
+}
+
+// ---------- Écran d'installation ----------
+async function cmdSetup() {
+  console.clear();
+  pastelBox("Bienvenue dans AuraCode — installation", [
+    pastel("sky", "Configuration en 3 étapes, couleurs pastel incluses."),
+    "",
+  ]);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const askLine = (q) => new Promise((res) => rl.question(P.sky + "◆ " + q + P.reset + " ", res));
+
+  // 1. Clé API
+  let key = getKey();
+  if (key) {
+    console.log("\n" + pastel("mint", "✓ Clé API déjà enregistrée."));
+    const keep = await new Promise((res) =>
+      rl.question("La garder ? [O/n] ", (a) => res(!/^n(on)?$/i.test(a.trim()))));
+    if (!keep) key = "";
+  }
+  if (!key) {
+    console.log("\n" + pastel("lavender", "◆ Étape 1/3 — Colle ta clé API (ak-vth-... depuis https://auth.vth-mc.fr/profile)"));
+    key = (await askLine("Clé :")).trim();
+    if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
+    const cfg = loadJson(CONFIG_FILE, {});
+    cfg.apiKey = key; saveJson(CONFIG_FILE, cfg);
+  }
+
+  // 2. Modèle
+  console.log("");
+  const model = await choose("Étape 2/3 — Choisis ton modèle", [
+    { value: "aura-1.1", label: "Aura 1.1", desc: "rapide, idéal au quotidien" },
+    { value: "aura-1.2", label: "Aura 1.2", desc: "premium, le plus malin (coût x4)" },
+    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "spécialiste programmation" },
+  ]);
+  if (!model) { console.log("Annulé."); rl.close(); return; }
+
+  // 3. Effort
+  console.log("");
+  const effort = (await choose("Étape 3/3 — Niveau de réflexion", [
+    { value: "low", label: "Low", desc: "réponses courtes et rapides" },
+    { value: "middle", label: "Middle", desc: "équilibré (recommandé)" },
+    { value: "high", label: "High", desc: "détaillé" },
+    { value: "xhigh", label: "XHigh", desc: "réflexion maximale" },
+  ])) || "middle";
+
+  const cfg = loadJson(CONFIG_FILE, {});
+  cfg.apiKey = key; cfg.model = model; cfg.effort = effort;
+  saveJson(CONFIG_FILE, cfg);
+  rl.close();
+
+  console.log("\n" + pastel("sky", "◆ Test de connexion au cloud..."));
+  try {
+    const me = await api("/api/me", null, key, "GET");
+    console.log(pastel("mint", `✓ Connecté ! ${me.sessions || 0} discussion(s) sur ton compte.`));
+  } catch (e) {
+    console.log(pastel("pink", "✗ Échec : " + e.message + " (vérifie ta clé)"));
+    return;
+  }
+  pastelBox("Installation terminée ✓", [
+    `Modèle par défaut : ${pastel("lemon", model)}   Effort : ${pastel("lemon", effort)}`,
+    "",
+    "Lance " + P.bold + "auracode" + P.reset + " pour discuter avec ton PC.",
+  ]);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n`);
+    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n`);
     return;
   }
   let model = "aura-1.1-code", effort = "high";
+  try {
+    const saved = loadJson(CONFIG_FILE, {});
+    if (saved.model) model = saved.model;
+    if (saved.effort) effort = saved.effort;
+  } catch { /* config absente, défauts */ }
   const mi = args.indexOf("--model");
   if (mi >= 0 && args[mi + 1]) model = args[mi + 1];
   const ei = args.indexOf("--effort");
@@ -294,6 +429,10 @@ async function main() {
     console.log("Déconnecté.");
     return;
   }
+  if (args[0] === "setup") {
+    await cmdSetup();
+    return;
+  }
   if (args[0] === "new") {
     const key = getKey();
     if (!key) { console.log("Pas connecté. Lance : auracode login"); return; }
@@ -310,8 +449,10 @@ async function main() {
   checkUpdate();
   let key = getKey();
   if (!key) {
-    console.log("Pas de clé API. Lance d'abord : auracode login\n");
-    return;
+    console.log(pastel("peach", "Aucune configuration détectée — lancement de l'installation.\n"));
+    await cmdSetup();
+    key = getKey();
+    if (!key) return;
   }
   try {
     if (!getSessionId()) await newSession(key, model);
