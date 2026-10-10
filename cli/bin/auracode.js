@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.1.2" };
+const PKG = { version: "1.1.3" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -174,6 +174,17 @@ function brandLine(W) {
   return pad + P.bold + P.pink + "Aura" + P.reset + P.dim + " by " + P.reset + P.bold + P.sky + "VTH Group" + P.reset;
 }
 
+// ID unique de build : hash court du fichier exécuté (marche en mode script comme .exe,
+// sans maintenance manuelle). Chaque mise à jour a donc son identifiant vérifiable.
+let BUILD_ID = null;
+const buildId = () => {
+  if (BUILD_ID) return BUILD_ID;
+  try {
+    BUILD_ID = crypto.createHash("sha256").update(fs.readFileSync(__filename)).digest("hex").slice(0, 8);
+  } catch { BUILD_ID = "dev"; }
+  return BUILD_ID;
+};
+
 async function splash() {
   // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
   // Retourne : version dispo (string), null (à jour), undefined (hors ligne).
@@ -192,6 +203,7 @@ async function splash() {
     center("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky"),
     "",
     center(`v${PKG.version}`, "dim"),
+    center(`build ${buildId()}`, "dim"),
     "",
   ];
   block.splice(block.length - 1, 0, brandLine(W));
@@ -2074,6 +2086,7 @@ async function runTUI(state, updateAvailable) {
           } catch (e) { screen.sys("Modèles : ? (" + e.message + ")"); }
           screen.sys("Clé : " + (state.key ? "présente" : "absente (auracode login)"));
           screen.sys(`Node ${process.version} • ${process.platform} • ${process.cwd()}`);
+          screen.sys(`Build : ${buildId()} (vérifie quel code tourne vraiment)`);
           try {
             const probe = path.join(process.cwd(), ".aura-write-test");
             fs.writeFileSync(probe, "ok");
@@ -2612,7 +2625,7 @@ async function runTUI(state, updateAvailable) {
           const hh = String(Math.floor(s / 3600)).padStart(2, "0");
           const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
           const ss = String(s % 60).padStart(2, "0");
-          screen.sys(`v${PKG.version} • Node ${process.version} • session ${hh}:${mm}:${ss} • ${screen.messages.length} blocs`);
+          screen.sys(`v${PKG.version} (build ${buildId()}) • Node ${process.version} • session ${hh}:${mm}:${ss} • ${screen.messages.length} blocs`);
           return;
         }
         case "prompt": {
@@ -3110,7 +3123,7 @@ async function cmdUninstall() {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
+  if (args.includes("--version") || args.includes("-v")) { console.log(`${PKG.version} (build ${buildId()})`); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
