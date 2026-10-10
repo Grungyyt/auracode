@@ -13,6 +13,20 @@ jobs:
         working-directory: cli
     steps:
       - uses: actions/checkout@v4
+      - name: Vérifie le secret NPM_TOKEN
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "::error::Secret NPM_TOKEN manquant. Va sur npmjs.com → Access Tokens → Generate New Token (Granular, package 'auracode', droits publish), puis GitHub → Grungyyt/auracode → Settings → Secrets and variables → Actions → New repository secret (nom : NPM_TOKEN)."
+            exit 1
+          fi
+      - name: Vérifie version package.json = tag
+        run: |
+          PKG_V=$(node -p "require('./package.json').version")
+          TAG_V="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_V" != "$TAG_V" ]; then
+            echo "::error::package.json ($PKG_V) ≠ tag ($GITHUB_REF_NAME). Aligne la version avant de tagger."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 20
