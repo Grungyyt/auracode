@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.11" };
+const PKG = { version: "0.8.12" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -747,6 +747,121 @@ const shellOut = (cmd, timeout = 30000) => new Promise((resolve) => {
   });
 });
 
+// ---------- Petits moteurs (zéro dépendance) ----------
+// Calculatrice sûre (pas d'eval) : + - * / % ^, (), sqrt/abs/sin/cos/log..., pi/e.
+const calcExpr = (src) => {
+  const FUNCS = { sqrt: Math.sqrt, abs: Math.abs, sin: Math.sin, cos: Math.cos, tan: Math.tan, log: (x) => Math.log10(x), ln: Math.log, exp: Math.exp, floor: Math.floor, ceil: Math.ceil, round: Math.round };
+  const CONSTS = { pi: Math.PI, e: Math.E };
+  let i = 0;
+  const s = String(src || "");
+  const skip = () => { while (/\s/.test(s[i])) i++; };
+  const parseNum = () => { skip(); const m = /^(\d+(?:\.\d+)?)/.exec(s.slice(i)); if (!m) throw new Error(`nombre attendu (pos ${i})`); i += m[1].length; return parseFloat(m[1]); };
+  const parsePrimary = () => {
+    skip();
+    if (s[i] === "(") { i++; const v = parseAdd(); skip(); if (s[i] !== ")") throw new Error(") manquante"); i++; return v; }
+    if (s[i] === "-") { i++; return -parsePrimary(); }
+    if (s[i] === "+") { i++; return parsePrimary(); }
+    const id = /^([a-z]+)/.exec(s.slice(i));
+    if (id) {
+      const name = id[1];
+      if (CONSTS[name] !== undefined && s[i + name.length] !== "(") { i += name.length; return CONSTS[name]; }
+      if (FUNCS[name]) { i += name.length; skip(); if (s[i] !== "(") throw new Error("( attendue après " + name); i++; const v = parseAdd(); skip(); if (s[i] !== ")") throw new Error(") manquante"); i++; return FUNCS[name](v); }
+      throw new Error("inconnu : " + name);
+    }
+    return parseNum();
+  };
+  const parsePow = () => { const v = parsePrimary(); skip(); if (s[i] === "^") { i++; return Math.pow(v, parsePow()); } return v; };
+  const parseMul = () => { let v = parsePow(); for (;;) { skip(); const op = s[i]; if (op === "*" || op === "/" || op === "%") { i++; const r = parsePow(); v = op === "*" ? v * r : op === "/" ? v / r : v % r; } else return v; } };
+  const parseAdd = () => { let v = parseMul(); for (;;) { skip(); const op = s[i]; if (op === "+" || op === "-") { i++; const r = parseMul(); v = op === "+" ? v + r : v - r; } else return v; } };
+  const v = parseAdd();
+  skip();
+  if (i < s.length) throw new Error("inattendu : " + s.slice(i));
+  if (!isFinite(v)) throw new Error("résultat infini");
+  return v;
+};
+// Durées : "25m", "1h30m", "45s", "90" (=90 min). Retourne des ms.
+const parseDur = (s) => {
+  const t = String(s || "").trim().toLowerCase();
+  if (/^\d+$/.test(t)) return parseInt(t, 10) * 60000;
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(t);
+  if (!m || (!m[1] && !m[2] && !m[3])) throw new Error("durée ? (ex : 25m, 1h30m, 45s)");
+  const ms = (parseInt(m[1] || "0", 10) * 3600 + parseInt(m[2] || "0", 10) * 60 + parseInt(m[3] || "0", 10)) * 1000;
+  if (ms <= 0 || ms > 12 * 3600 * 1000) throw new Error("durée entre 1s et 12h");
+  return ms;
+};
+// Listes persistées (notes, todos) : [{t, text, done?}].
+const NOTES_FILE = path.join(HOME, "notes.json");
+const TODOS_FILE = path.join(HOME, "todos.json");
+const loadList = (p) => { try { const a = JSON.parse(fs.readFileSync(p, "utf8")); return Array.isArray(a) ? a : []; } catch { return []; } };
+const saveList = (p, a) => { try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(a, null, 2)); return true; } catch { return false; } };
+// Export.
+const escapeHtml = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const exportTxt = (messages) => messages.map((m) => m.role === "user" ? `Toi : ${m.text}` : m.role === "assistant" ? `Aura : ${m.text}` : m.role === "tool" ? `⚙ ${m.name} : ${m.output || ""}` : `${m.text}`).join("\n\n");
+const exportHtml = (messages) => {
+  const rows = messages.map((m) => {
+    const cls = m.role === "user" ? "user" : m.role === "assistant" ? "aura" : "sys";
+    const head = m.role === "user" ? "Toi" : m.role === "assistant" ? "Aura" : (m.name || "info");
+    const body = m.role === "tool" ? (m.output || "") : (m.text || "");
+    return `<div class="msg ${cls}"><div class="head">${escapeHtml(head)} <span>${escapeHtml(m.time || "")}</span></div><pre>${escapeHtml(body)}</pre></div>`;
+  }).join("\n");
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Conversation AuraCode</title><style>body{font-family:system-ui;background:#f5f2eb;color:#262624;max-width:760px;margin:0 auto;padding:24px}.msg{border-radius:12px;padding:12px 16px;margin:12px 0}.user{background:#D97757;color:#fff;margin-left:20%}.aura{background:#FAF9F5;border:1px solid #DED8C6}.sys{color:#6F6E69;font-size:13px;text-align:center}.head{font-weight:700;font-size:12px;margin-bottom:6px}.head span{font-weight:400;opacity:.7}pre{white-space:pre-wrap;margin:0;font-size:13px}</style></head><body><h1>Conversation AuraCode</h1>${rows}</body></html>`;
+};
+// Recherche dans l'historique : [{i, role, snippet}].
+const findMatches = (messages, q) => {
+  const needle = String(q || "").toLowerCase();
+  if (!needle) return [];
+  const out = [];
+  messages.forEach((m, i) => {
+    const t = String(m.text || m.output || "");
+    const idx = t.toLowerCase().indexOf(needle);
+    if (idx >= 0) out.push({ i, role: m.role, snippet: t.slice(Math.max(0, idx - 30), idx + 60).replace(/\n/g, " ") });
+  });
+  return out;
+};
+// Top fichiers du dossier : [{name, size}].
+const topFiles = (dir, n = 10) => {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const files = [];
+  for (const e of entries) {
+    if (e.name === "node_modules" || e.name === ".git") continue;
+    const full = path.join(dir, e.name);
+    try {
+      const st = fs.statSync(full);
+      if (st.isFile()) files.push({ name: e.name, size: st.size });
+    } catch { /* ignore */ }
+  }
+  return files.sort((a, b) => b.size - a.size).slice(0, n);
+};
+const fmtSize = (b) => b > 1048576 ? (b / 1048576).toFixed(1) + " Mo" : b > 1024 ? (b / 1024).toFixed(1) + " Ko" : b + " o";
+// Minuteur avec compte à rebours dans la barre de statut + cloche à la fin.
+function startTimer(screen, ms, label) {
+  stopTimer(screen, true);
+  screen.timer = { until: Date.now() + ms, label: label || "minuteur" };
+  screen.timer.iv = setInterval(() => {
+    if (!screen.timer) return;
+    if (screen.timer.until - Date.now() <= 0) {
+      const l = screen.timer.label;
+      stopTimer(screen, true);
+      screen.sys(`⏱ Temps écoulé : ${l}`);
+      try { process.stdout.write("\x07\x07\x07"); } catch { /* ignore */ }
+      screen.render();
+      return;
+    }
+    screen.render();
+  }, 1000);
+  if (screen.timer.iv.unref) screen.timer.iv.unref();
+  screen.render();
+}
+function stopTimer(screen, silent) {
+  if (screen.timer) {
+    try { clearInterval(screen.timer.iv); } catch { /* ignore */ }
+    screen.timer = null;
+    if (!silent) screen.sys("Minuteur arrêté.");
+    screen.render();
+  }
+}
+
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conversation" },
@@ -775,6 +890,26 @@ const COMMANDS = [
   { name: "/export", desc: "Sauver en markdown : /export [fichier]" },
   { name: "/update", desc: "Mettre à jour AuraCode" },
   { name: "/uninstall", desc: "Désinstaller le programme" },
+  { name: "/calc", desc: "Calculatrice : /calc (2+3)*4" },
+  { name: "/meteo", desc: "Météo : /meteo [ville]" },
+  { name: "/trad", desc: "Traduire : /trad fr en bonjour" },
+  { name: "/timer", desc: "Minuteur : /timer 25m repos" },
+  { name: "/stoptimer", desc: "Arrêter le minuteur" },
+  { name: "/note", desc: "Noter vite : /note <texte>" },
+  { name: "/notes", desc: "Voir les notes" },
+  { name: "/unnote", desc: "Supprimer une note : /unnote <n>" },
+  { name: "/todo", desc: "Tâche : /todo <texte>" },
+  { name: "/todos", desc: "Voir les tâches" },
+  { name: "/todook", desc: "Cocher : /todook <n>" },
+  { name: "/tododel", desc: "Supprimer : /tododel <n>" },
+  { name: "/models", desc: "Modèles du serveur" },
+  { name: "/ping", desc: "Latence API" },
+  { name: "/top", desc: "Gros fichiers du dossier" },
+  { name: "/find", desc: "Chercher dans l'historique" },
+  { name: "/whoami", desc: "Qui suis-je (compte)" },
+  { name: "/banner", desc: "Logo AuraCode" },
+  { name: "/de", desc: "Lancer un dé" },
+  { name: "/piece", desc: "Pile ou face" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
@@ -827,6 +962,7 @@ class Screen {
     this.account = false;
     this.accountCache = {};
     this.pendingWrite = null;
+    this.timer = null;
     this.lastPrompt = null;
     this.cancelled = false;
     this.abort = null;
@@ -854,6 +990,7 @@ class Screen {
   stop() {
     try {
       if (this.typeTimer) { clearInterval(this.typeTimer); this.typeTimer = null; }
+      if (this.timer) { try { clearInterval(this.timer.iv); } catch { /* ignore */ } this.timer = null; }
       process.stdout.write("\x1b[?25h");
       if (this.boundKey) process.stdin.removeListener("keypress", this.boundKey);
       if (this.boundResize) process.stdout.removeListener("resize", this.boundResize);
@@ -1222,8 +1359,15 @@ class Screen {
     } else {
       sL = `${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}`;
     }
-    const rParts = [this.quotaText, br ? `⎇ ${br}` : "", cwd].filter(Boolean);
-    sR = rParts.join(" • ");
+    const rParts = [];
+    if (this.timer) {
+      const left = Math.max(0, this.timer.until - Date.now());
+      const mm = String(Math.floor(left / 60000)).padStart(2, "0");
+      const ss = String(Math.floor((left % 60000) / 1000)).padStart(2, "0");
+      rParts.push(`⏱ ${mm}:${ss} ${this.timer.label}`);
+    }
+    rParts.push(this.quotaText, br ? `⎇ ${br}` : "", cwd);
+    sR = rParts.filter(Boolean).join(" • ");
     if (this.scroll > 0) sR += (sR ? " • " : "") + "PgDn : bas";
     if (this.updateAvailable && !this.busy) sR += (sR ? " • " : "") + "Tape /update";
     let sLine = sL;
@@ -1544,19 +1688,32 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "export": {
-          const fname = arg || "aura-export.md";
-          const md = "# Conversation AuraCode\n\n" + screen.messages.map((m) =>
+          const parts = (arg || "").split(/\s+/).filter(Boolean);
+          let fmt = "md";
+          if (parts.length && ["md", "html", "txt"].includes(parts[0].toLowerCase())) fmt = parts.shift().toLowerCase();
+          const fname = parts.join(" ") || `aura-export.${fmt}`;
+          const body = fmt === "html" ? exportHtml(screen.messages) : fmt === "txt" ? exportTxt(screen.messages) : "# Conversation AuraCode\n\n" + screen.messages.map((m) =>
             m.role === "user" ? `**Toi :** ${m.text}` : m.role === "assistant" ? `**Aura :** ${m.text}` : m.role === "tool" ? `⚙ ${m.name} : ${(m.output || "").slice(0, 500)}` : `_${m.text}_`
           ).join("\n\n");
           try {
             const fp = path.resolve(process.cwd(), fname);
-            fs.writeFileSync(fp, md);
+            fs.writeFileSync(fp, body);
             screen.sys("Exporté : " + fp);
           } catch (e) { screen.sys("Erreur : " + e.message); }
           return;
         }
         case "theme": {
           const names = Object.keys(THEMES);
+          if (arg === "surprise") {
+            const pool = names.filter((n) => n !== (state.theme || "pastel"));
+            const pick = pool[Math.floor(Math.random() * pool.length)];
+            Object.assign(P, THEMES[pick]);
+            state.theme = pick;
+            saveCfg();
+            screen.sys("Thème surprise : " + pick);
+            screen.render();
+            return;
+          }
           if (!arg) {
             pickModal("Thème", names, state.theme || "pastel", (v) => {
               Object.assign(P, THEMES[v]);
@@ -1800,6 +1957,164 @@ async function runTUI(state, updateAvailable) {
           screen.render();
           return;
         }
+        case "calc": {
+          if (!arg) { screen.sys("Usage : /calc <expression>  (ex : /calc (2+3)*4, sqrt(16))"); return; }
+          try {
+            const v = calcExpr(arg);
+            screen.tool("calc", true, null, `${arg} = ${Math.round(v * 1e6) / 1e6}`);
+          } catch (e) { screen.tool("calc", false, null, e.message); }
+          return;
+        }
+        case "meteo": {
+          const city = arg || "Paris";
+          screen.busy = true; screen.render();
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 10000);
+            const r = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=3&lang=fr`, { signal: ctrl.signal, headers: { "User-Agent": "auracode" } });
+            clearTimeout(t);
+            const txt = (await r.text()).trim();
+            if (!r.ok || !txt) throw new Error("météo indisponible");
+            screen.tool("météo " + city, true, null, txt);
+          } catch (e) { screen.tool("météo", false, null, e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "trad": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /trad <src> <dst> <texte>  (ex : /trad fr en bonjour)"); return; }
+          const src = parts[0], dst = parts[1], text = parts.slice(2).join(" ");
+          screen.busy = true; screen.render();
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 10000);
+            const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${encodeURIComponent(src)}|${encodeURIComponent(dst)}`, { signal: ctrl.signal, headers: { "User-Agent": "auracode" } });
+            clearTimeout(t);
+            const j = await r.json().catch(() => ({}));
+            const out = (j.responseData && j.responseData.translatedText) || "";
+            if (!r.ok || !out) throw new Error((j.responseStatus && String(j.responseStatus)) || "traduction impossible");
+            screen.tool(`trad ${src}→${dst}`, true, null, out);
+          } catch (e) { screen.tool("trad", false, null, e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "timer": {
+          if (!arg) { screen.sys("Usage : /timer <durée> [label]  (ex : /timer 25m repos)"); return; }
+          const [d, ...rest] = arg.split(/\s+/);
+          try {
+            startTimer(screen, parseDur(d), rest.join(" ") || "minuteur");
+            screen.sys("Minuteur lancé.");
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "stoptimer": stopTimer(screen); return;
+        case "note": {
+          if (!arg) { screen.sys("Usage : /note <texte>"); return; }
+          const arr = loadList(NOTES_FILE);
+          arr.push({ t: Date.now(), text: arg });
+          saveList(NOTES_FILE, arr);
+          screen.sys(`Noté (#${arr.length}).`);
+          return;
+        }
+        case "notes": {
+          const arr = loadList(NOTES_FILE);
+          if (!arr.length) { screen.sys("Aucune note. /note <texte> pour ajouter."); return; }
+          screen.sys(`${arr.length} note(s) :`);
+          arr.slice(-15).forEach((n, i) => screen.sys(`  ${i + 1}. ${n.text}`));
+          return;
+        }
+        case "unnote": {
+          const n = parseInt(arg, 10);
+          const arr = loadList(NOTES_FILE);
+          if (!n || n < 1 || n > arr.length) { screen.sys("Usage : /unnote <numéro> (voir /notes)"); return; }
+          const gone = arr.splice(n - 1, 1)[0];
+          saveList(NOTES_FILE, arr);
+          screen.sys("Supprimé : " + String(gone.text).slice(0, 80));
+          return;
+        }
+        case "todo": {
+          if (!arg) { screen.sys("Usage : /todo <texte>"); return; }
+          const arr = loadList(TODOS_FILE);
+          arr.push({ t: Date.now(), text: arg, done: false });
+          saveList(TODOS_FILE, arr);
+          screen.sys(`À faire (#${arr.length}).`);
+          return;
+        }
+        case "todos": {
+          const arr = loadList(TODOS_FILE);
+          if (!arr.length) { screen.sys("Rien à faire. /todo <texte> pour ajouter."); return; }
+          arr.slice(-15).forEach((x, i) => screen.sys(`  ${i + 1}. [${x.done ? "x" : " "}] ${x.text}`));
+          return;
+        }
+        case "todook": {
+          const n = parseInt(arg, 10);
+          const arr = loadList(TODOS_FILE);
+          if (!n || n < 1 || n > arr.length) { screen.sys("Usage : /todook <numéro>"); return; }
+          arr[n - 1].done = true;
+          saveList(TODOS_FILE, arr);
+          screen.sys("Fait ✓ (#" + n + ").");
+          return;
+        }
+        case "tododel": {
+          const n = parseInt(arg, 10);
+          const arr = loadList(TODOS_FILE);
+          if (!n || n < 1 || n > arr.length) { screen.sys("Usage : /tododel <numéro>"); return; }
+          const gone = arr.splice(n - 1, 1)[0];
+          saveList(TODOS_FILE, arr);
+          screen.sys("Supprimé : " + String(gone.text).slice(0, 80));
+          return;
+        }
+        case "models": {
+          try {
+            const d = await api("/api/models", null, state.key, "GET");
+            const arr = Array.isArray(d) ? d : d.models || [];
+            screen.tool("modèles", true, null, arr.map((m) => `${m.id || m} — ${m.name || ""}${m.loaded === false ? " (absent)" : ""}`.trim()).join("\n") || "Aucun.");
+          } catch (e) { screen.tool("modèles", false, null, e.message); }
+          return;
+        }
+        case "ping": {
+          try {
+            const t0 = Date.now();
+            const st = await fetch(API + "/health").then((r) => r.status).catch(() => 0);
+            screen.sys(`API : HTTP ${st} en ${Date.now() - t0} ms`);
+          } catch (e) { screen.sys("Ping impossible : " + e.message); }
+          return;
+        }
+        case "top": {
+          const n = Math.max(1, Math.min(20, parseInt(arg, 10) || 10));
+          const files = topFiles(process.cwd(), n);
+          screen.tool("top", true, null, files.map((f) => `${fmtSize(f.size)}  ${f.name}`).join("\n") || "(vide)");
+          return;
+        }
+        case "find": {
+          if (!arg) { screen.sys("Usage : /find <mot>"); return; }
+          const hits = findMatches(screen.messages, arg);
+          if (!hits.length) { screen.sys(`Aucun résultat pour « ${arg} ».`); return; }
+          screen.sys(`${hits.length} résultat(s) :`);
+          hits.slice(-10).forEach((h) => screen.sys(`  #${h.i} [${h.role}] …${h.snippet}…`));
+          return;
+        }
+        case "whoami": {
+          try {
+            const me = await api("/api/me", null, state.key, "GET");
+            screen.sys(`Toi : ${String(me.user_id || "?").slice(0, 20)} • ${me.sessions || 0} conv • ${me.messages_used || 0} msgs`);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "banner": {
+          ART_LINES.forEach((ln) => screen.sys("  " + ln.trim()));
+          screen.sys(`v${PKG.version} — Aura by VTH Group`);
+          return;
+        }
+        case "de": {
+          const f = Math.max(2, parseInt(arg, 10) || 6);
+          screen.sys(`🎲 ${1 + Math.floor(Math.random() * f)} (d${f})`);
+          return;
+        }
+        case "piece": {
+          screen.sys(`🪙 ${Math.random() < 0.5 ? "Pile" : "Face"}`);
+          return;
+        }
         default:
           screen.sys("Commande inconnue, /help pour la liste.");
           return;
@@ -1976,7 +2291,7 @@ async function main() {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
-  Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/ = suggestions, @fichier, Ctrl+P palette, F1 aide)\n`);
+  Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir)\n`);
     return;
   }
   purgeStoredSecrets();
