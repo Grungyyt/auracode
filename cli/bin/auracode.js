@@ -14,7 +14,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.3" };
+const PKG = { version: "0.8.4" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -329,6 +329,9 @@ function extractTool(text) {
   catch { return { name: m[1], args: {}, _raw: m[2] }; }
 }
 
+// La demande ressemble-t-elle à une action sur le PC ?
+const wantsAction = (t) => /\b(cré|cree|créer|creer|écris|ecris|écrire|ecrire|lis|lire|lisez|ouvre|ouvrir|ouvrez|exécute|execute|exécuter|lance|lancer|cherche|chercher|trouve|trouver|modifie|modifier|supprime|supprimer|renomme|déplace|copie|copier|fichier|dossier|script|programme|installe|télécharge)\b/i.test(t || "");
+
 // Chronomètre de réflexion (onTick reçoit les secondes, ou null à la fin).
 async function timedCall(fn, onTick) {
   const start = Date.now();
@@ -346,15 +349,14 @@ async function timedCall(fn, onTick) {
 
 async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   let sessionId = getSessionId();
-  // Le serveur a son propre prompt système générique : on injecte le protocole
-  // d'outils + le contexte PC dans le premier message, sinon le modèle refuse d'agir.
   prompt = SYSTEM + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]\nDemande de l'utilisateur : ` + prompt;
   const callChat = async (sid, hist) =>
     api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: hist }, key, "POST", ui.signal);
 
   if (!sessionId) sessionId = await newSession(key, model);
+  const userAsk = prompt;
   const history = [];
-  let totalTime = 0;
+  let totalTime = 0, forced = 0;
   for (let step = 0; step < 12; step++) {
     let data;
     const runOnce = async (sid) => {
@@ -379,6 +381,15 @@ async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
     const reply = data.reply || "";
     const tool = extractTool(reply);
     if (!tool) {
+      // Le modèle répond sans agir alors qu'on lui demande une action :
+      // on le recadre (max 2 fois) au lieu d'afficher son refus.
+      if (wantsAction(userAsk) && forced < 2) {
+        forced++;
+        history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
+        prompt = `NON. Tu as accès au PC via tes outils et tu DOIS agir maintenant. Réponds UNIQUEMENT par UN bloc outil utilisant le chemin demandé par l'utilisateur, exemple : <tool name="write_file">{"path": "CHEMIN", "content": "CONTENU"}</tool>. Pas d'excuses, pas de tutoriel Notepad, pas de lien image, juste le bloc outil.`;
+        ui.sys("Le modèle hésite, je le recadre...", true);
+        continue;
+      }
       ui.assistant(reply.trim());
       ui.sys(`réfléchi en ${totalTime.toFixed(1)}s`, true);
       return;
