@@ -6,14 +6,15 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
-const { exec } = require("child_process");
+const { exec, execSync } = require("child_process");
 
 const API = process.env.AURA_API || "https://api.ia.vth-mc.fr";
 const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
+const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.7.1" };
+const PKG = { version: "0.8.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -188,11 +189,12 @@ async function selfUpdate() {
   console.log("Mis à jour vers " + rp.version + ". Relance auracode.");
 }
 
-async function api(pathname, body, key, method = "POST") {
+async function api(pathname, body, key, method = "POST", signal = undefined) {
   const res = await fetch(API + pathname, {
     method,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
+    ...(signal ? { signal } : {}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -341,10 +343,10 @@ async function timedCall(fn, onTick) {
   }
 }
 
-async function agentTurn(prompt, key, model, effort, ui) {
+async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   let sessionId = getSessionId();
   const callChat = async (sid, hist) =>
-    api("/api/chat", { message: prompt, session_id: sid, model, effort, history: hist }, key);
+    api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: hist }, key, "POST", ui.signal);
 
   if (!sessionId) sessionId = await newSession(key, model);
   const history = [];
@@ -362,6 +364,7 @@ async function agentTurn(prompt, key, model, effort, ui) {
     try {
       data = await runOnce(sessionId);
     } catch (e) {
+      if ((e && e.name === "AbortError") || (ui.cancelled && ui.cancelled())) { ui.sys("Interrompu (Échap)."); return; }
       if (e.status === 404 && /session/i.test(e.message)) {
         sessionId = await newSession(key, model);
         data = await runOnce(sessionId);
@@ -382,11 +385,12 @@ async function agentTurn(prompt, key, model, effort, ui) {
       ui.sys(`outil inconnu : ${tool.name}, je demande autre chose...`, true);
       continue;
     }
-    ui.sys(`AuraCode exécute : ${tool.name}`, true);
-    let result;
+    const t0 = Date.now();
+    let result, ok = true;
     try { result = await TOOLS[tool.name].run(tool.args || {}, ui); }
-    catch (e) { result = "Erreur outil : " + e.message; }
-    ui.sys((result || "").slice(0, 400));
+    catch (e) { result = "Erreur outil : " + e.message; ok = false; }
+    if (ui.tool) ui.tool(tool.name, ok, (Date.now() - t0) / 1000, result || "");
+    else { ui.sys(`AuraCode exécute : ${tool.name}`, true); ui.sys((result || "").slice(0, 400)); }
     history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
     prompt = `Résultat de ${tool.name} :\n${result}\nContinue ta tâche (une action à la fois, ou réponds sans bloc outil si terminé).`;
   }
@@ -500,16 +504,127 @@ async function cmdSetup() {
   ]);
 }
 
+// ---------- Helpers d'affichage (style opencode) ----------
+const stripAnsi = (s) => String(s || "").replace(/\x1b\[[0-9;]*m/g, "");
+const truncVis = (s, w) => {
+  let vis = 0, i = 0, out = "";
+  const src = String(s || "");
+  while (i < src.length && vis < w) {
+    const m = /^\x1b\[[0-9;]*m/.exec(src.slice(i));
+    if (m) { out += m[0]; i += m[0].length; }
+    else { out += src[i]; i++; vis++; }
+  }
+  return out + P.reset;
+};
+// Markdown inline minimal : gras, code, titres, citations.
+const mdInline = (s) => String(s || "")
+  .replace(/`([^`\n]+)`/g, (_, c) => P.lemon + c + P.reset)
+  .replace(/\*\*([^*]+)\*\*/g, (_, b) => P.bold + b + P.reset)
+  .replace(/^### (.*)$/, (_, h) => P.bold + P.pink + h + P.reset)
+  .replace(/^## (.*)$/, (_, h) => P.bold + P.lavender + h + P.reset)
+  .replace(/^# (.*)$/, (_, h) => P.bold + P.lemon + h + P.reset)
+  .replace(/^> (.*)$/, (_, q) => P.dim + "▏ " + q + P.reset);
+// Découpe exacte (offsets conservés) pour le curseur multiligne.
+const wrapRows = (text, width) => {
+  const w = Math.max(5, width);
+  if (!text) return [{ text: "", start: 0 }];
+  const rows = [];
+  let i = 0;
+  while (i < text.length) {
+    let cut = Math.min(i + w, text.length);
+    if (cut < text.length) {
+      const sp = text.lastIndexOf(" ", cut);
+      if (sp > i) cut = sp;
+    }
+    rows.push({ text: text.slice(i, cut), start: i });
+    i = cut;
+    if (i < text.length && text[i] === " ") i++;
+  }
+  return rows.length ? rows : [{ text: "", start: 0 }];
+};
+// Scan des fichiers du projet (pour @mentions), cache 10 s.
+let fileCache = { t: 0, list: [] };
+const scanFiles = () => {
+  const now = Date.now();
+  if (now - fileCache.t < 10000 && fileCache.list.length) return fileCache.list;
+  const out = [];
+  const walk = (dir, rel) => {
+    if (out.length >= 60) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const e of entries) {
+      if (out.length >= 60) break;
+      if (e.name === "node_modules" || e.name === ".git" || e.name === "dist" || e.name.startsWith(".")) continue;
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), r);
+      else if (e.isFile() && r.length < 80) out.push(r);
+    }
+  };
+  try { walk(process.cwd(), ""); } catch { /* ignore */ }
+  fileCache = { t: now, list: out };
+  return out;
+};
+// Branche git du dossier (cache 5 s).
+let branchCache = { t: 0, v: "" };
+const gitBranch = () => {
+  const now = Date.now();
+  if (now - branchCache.t < 5000) return branchCache.v;
+  branchCache.t = now;
+  try {
+    branchCache.v = execSync("git rev-parse --abbrev-ref HEAD", { cwd: process.cwd(), timeout: 1500, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch { branchCache.v = ""; }
+  return branchCache.v;
+};
+// Remplace @chemin par le contenu du fichier (max 8 Ko, 3 fichiers).
+const expandMentions = (line) => {
+  let n = 0;
+  const send = String(line).replace(/(^|[\s(])@([\w.\-/]+)/g, (m, pre, p) => {
+    if (n >= 3) return m;
+    try {
+      const abs = inside(p);
+      const st = fs.statSync(abs);
+      if (!st.isFile() || st.size > 20000) return m;
+      n++;
+      return `${pre}[fichier ${p}]\n${fs.readFileSync(abs, "utf8").slice(0, 8000)}`;
+    } catch { return m; }
+  });
+  return { display: line, send };
+};
+// Shell local (timeout 30 s, sortie tronquée).
+const shellOut = (cmd, timeout = 30000) => new Promise((resolve) => {
+  exec(cmd, { cwd: process.cwd(), timeout, maxBuffer: 1024 * 500 }, (err, stdout, stderr) => {
+    let out = (stdout || "") + (stderr ? "\n[stderr]\n" + stderr : "");
+    if (err && !out) out = "Erreur: " + err.message;
+    resolve(out.slice(0, 6000) || "(pas de sortie)");
+  });
+});
+
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conversation" },
   { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
+  { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
+  { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono"] },
+  { name: "/sessions", desc: "Panneau des conversations (F2)" },
+  { name: "/retry", desc: "Relancer la dernière réponse" },
+  { name: "/compact", desc: "Garder les N derniers blocs (/compact 20)" },
+  { name: "/stats", desc: "Stats de la session" },
+  { name: "/doctor", desc: "Diagnostic connexion / modèles" },
   { name: "/quota", desc: "Afficher ton quota global" },
   { name: "/image", desc: "Générer une image : /image <texte>" },
-  { name: "/copy", desc: "Copier la dernière réponse" },
-  { name: "/export", desc: "Sauver la conversation en markdown" },
-  { name: "/theme", desc: "Changer de thème de couleur" },
+  { name: "/bash", desc: "Commande shell (confirmation)" },
+  { name: "/read", desc: "Lire un fichier : /read <chemin>" },
+  { name: "/ls", desc: "Lister un dossier : /ls [dossier]" },
+  { name: "/write", desc: "Écrire un fichier : /write <chemin> … /end" },
+  { name: "/run", desc: "Exécuter le dernier bloc de code" },
+  { name: "/undo", desc: "Annuler la dernière écriture" },
+  { name: "/search", desc: "Chercher du texte : /search <motif>" },
+  { name: "/open", desc: "Ouvrir fichier/dossier" },
+  { name: "/sysinfo", desc: "Infos du PC" },
+  { name: "/copy", desc: "Copier une réponse : /copy [n]" },
+  { name: "/export", desc: "Sauver en markdown : /export [fichier]" },
   { name: "/update", desc: "Mettre à jour AuraCode" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
@@ -554,9 +669,18 @@ class Screen {
     this.busy = false;
     this.thinkSec = null;
     this.quotaText = "";
-    this.hist = [];
+    this.hist = loadJson(HIST_FILE, []);
     this.histIdx = -1;
     this.draft = "";
+    this.modal = null;
+    this.sidebar = false;
+    this.sessionsCache = [];
+    this.pendingWrite = null;
+    this.lastPrompt = null;
+    this.cancelled = false;
+    this.abort = null;
+    this.typingMsg = null;
+    this.undoStack = [];
     this.done = null;
     this.onLine = null;
     this.typeTimer = null;
@@ -605,11 +729,12 @@ class Screen {
     this.render();
   }
 
-  assistant(text) {
-    const m = { role: "assistant", text: "", full: String(text), time: timeStr() };
+  assistant(text, meta = null) {
+    const m = { role: "assistant", text: "", full: String(text), time: timeStr(), meta };
     this.messages.push(m);
     if (this.messages.length > 300) this.messages.splice(0, this.messages.length - 300);
     if (this.typeTimer) clearInterval(this.typeTimer);
+    this.typingMsg = m;
     this.typeTimer = setInterval(() => {
       const next = Math.min(m.full.length, m.text.length + 40);
       m.text = m.full.slice(0, next);
@@ -617,9 +742,101 @@ class Screen {
       if (next >= m.full.length) {
         clearInterval(this.typeTimer);
         this.typeTimer = null;
+        this.typingMsg = null;
       }
     }, 40);
     this.render();
+  }
+
+  tool(name, ok, ms, output) {
+    this.messages.push({ role: "tool", name: String(name), ok: !!ok, ms: ms == null ? null : ms, output: String(output || "").slice(0, 2000), time: timeStr() });
+    if (this.messages.length > 300) this.messages.splice(0, this.messages.length - 300);
+    this.render();
+  }
+
+  openModal(title, items, onPick) {
+    this.modal = { title, items: items || [], sel: 0, onPick };
+    this.completion = null;
+    this.render();
+  }
+
+  openPalette() {
+    this.openModal("Commandes", COMMANDS.map((c) => ({ label: `${c.name}  —  ${c.desc}`, value: c.name })), (v) => {
+      if (!v) { this.render(); return; }
+      this.input = v + " ";
+      this.cursor = this.input.length;
+      this.completion = null;
+      this.updateCompletion();
+      this.render();
+    });
+  }
+
+  openHelp() {
+    const rows = [
+      "↑↓ historique • Tab compléter • Ctrl+J saut de ligne",
+      "Ctrl+P palette • F1 aide • F2 sessions • Alt+1-9 switch",
+      "PgUp/PgDn défiler • Échap annuler • Ctrl+C quitter",
+      "@fichier joindre un fichier • /help commandes",
+    ];
+    this.openModal("Aide — raccourcis", rows.map((r) => ({ label: r, value: "__close" })), () => this.render());
+  }
+
+  async toggleSidebar() {
+    this.sidebar = !this.sidebar;
+    if (this.sidebar) {
+      try {
+        const d = await api("/api/sessions", null, this.state.key, "GET");
+        this.sessionsCache = (d.sessions || []).slice(-9);
+      } catch { this.sessionsCache = []; }
+    }
+    this.render();
+  }
+
+  async switchSession(i) {
+    const s = this.sessionsCache[i];
+    if (!s || !s.session_id) return;
+    setSessionId(s.session_id);
+    if (s.model) this.state.model = s.model;
+    this.sys("Session : " + String(s.session_id).slice(0, 8));
+    await this.refreshQuota();
+    this.render();
+  }
+
+  sidebarRows(h) {
+    const sbW = Math.min(30, Math.max(20, Math.floor(this.W * 0.3)));
+    const rows = [];
+    const n = this.sessionsCache.length;
+    const cur = getSessionId();
+    rows.push(` Sessions (${n})`);
+    rows.push("─".repeat(sbW));
+    for (let i = 0; i < Math.min(9, n); i++) {
+      const s = this.sessionsCache[i] || {};
+      const id = String(s.session_id || "?").slice(0, 8);
+      const mark = s.session_id && s.session_id === cur ? "●" : " ";
+      rows.push(`${mark}${i + 1} ${id} ${s.model || ""}`.slice(0, sbW));
+    }
+    while (rows.length < h - 1) rows.push("");
+    rows.push("Alt+n • F2 fermer".slice(0, sbW));
+    return { sbW, rows: rows.slice(0, h) };
+  }
+
+  inputRows(fieldW) {
+    const paras = this.input.split("\n");
+    const rows = [];
+    let base = 0, crow = 0, ccol = 0;
+    paras.forEach((p) => {
+      for (const r of wrapRows(p, fieldW)) {
+        const gstart = base + r.start;
+        const gi = rows.length;
+        rows.push({ text: r.text, gi });
+        if (this.cursor >= gstart) { crow = gi; ccol = Math.min(this.cursor - gstart, r.text.length); }
+      }
+      base += p.length + 1;
+    });
+    if (!rows.length) rows.push({ text: "", gi: 0 });
+    const maxR = 5;
+    const start = rows.length <= maxR ? 0 : Math.max(0, Math.min(rows.length - maxR, crow - 2));
+    return { rows, crow, ccol, start, shown: rows.slice(start, start + maxR) };
   }
 
   thinking(sec) {
@@ -656,7 +873,10 @@ class Screen {
     const W = this.W, H = this.H;
     const compItems = this.completion ? this.completion.items.slice(0, 6) : [];
     const compH = compItems.length;
-    const viewH = Math.max(3, H - 5 - compH);
+    const fieldW = Math.max(10, W - 6);
+    const inR = this.confirmState ? null : this.inputRows(fieldW);
+    const boxH = inR ? inR.shown.length + 2 : 1;
+    const viewH = Math.max(3, H - 1 - boxH - 1 - compH);
 
     const boxW = Math.min(64, Math.max(26, W - 8));
     const innerW = boxW - 4;
@@ -668,6 +888,20 @@ class Screen {
           const pad = " ".repeat(Math.max(0, Math.floor((W - wl.length) / 2)));
           push(pad + wl, P.dim + pad + wl + P.reset);
         }
+        push("", "");
+        continue;
+      }
+      if (m.role === "tool") {
+        const icol = m.ok ? P.mint : P.pink;
+        const icon = m.ok ? "✓" : "✗";
+        push("", ` ${icol}⚙ ${m.name} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""}${P.reset}`);
+        const outs = String(m.output || "").split("\n").slice(0, 6);
+        for (const ol of outs) {
+          const t = ol.slice(0, Math.max(20, W - 10));
+          push("  " + t, P.dim + "  " + t + P.reset);
+        }
+        const rest = String(m.output || "").split("\n").length - outs.length;
+        if (rest > 0) push("", P.dim + `  … +${rest} lignes` + P.reset);
         push("", "");
         continue;
       }
@@ -683,8 +917,17 @@ class Screen {
       const bot = "╰" + "─".repeat(bw + 2) + "╯";
       const headPlain = `${mine ? "Toi" : "Aura"} • ${m.time || ""}`;
       const headOut = nameColor + P.bold + headPlain + P.reset;
-      const rowsV = [headPlain, top, ...wrapped.map((wl) => `│ ${padEnd(wl)} │`), bot, ""];
-      const rowsO = [headOut, border + top + P.reset, ...wrapped.map((wl) => border + "│ " + P.reset + padEnd(wl) + border + " │" + P.reset), border + bot + P.reset, ""];
+      const rowsV = [headPlain, top, ...wrapped.map((wl) => `│ ${padEnd(wl)} │`), bot];
+      const fmt = (wl) => (m.role === "assistant" ? mdInline(wl) : wl);
+      const rowsO = [headOut, border + top + P.reset, ...wrapped.map((wl) => border + "│ " + P.reset + fmt(padEnd(wl)) + border + " │" + P.reset), border + bot + P.reset];
+      if (m.meta && !mine) {
+        const meta = `${m.time || ""} · ${(m.meta.ms || 0).toFixed(1)}s · ~${m.meta.tok || 0} tok`;
+        rowsV.push("  " + meta, "");
+        rowsO.push("  " + P.dim + meta + P.reset, "");
+      } else {
+        rowsV.push("");
+        rowsO.push("");
+      }
       rowsV.forEach((v, i) => {
         const left = mine ? " ".repeat(Math.max(0, W - v.length - 1)) : " ";
         push(left + v, left + rowsO[i]);
@@ -698,53 +941,94 @@ class Screen {
     const visible = lines.slice(start, start + viewH);
     while (visible.length < viewH) visible.unshift(null);
 
-    let rawL = `◆ AuraCode  ${this.state.model} • ${this.state.effort}`;
+    if (this.modal) {
+      const mw = Math.min(62, W - 4);
+      const iw = mw - 4;
+      const fit = (s) => String(s).slice(0, iw) + " ".repeat(Math.max(0, iw - Math.min(String(s).length, iw)));
+      const mRows = [];
+      mRows.push(P.dim + "╭" + "─".repeat(mw - 2) + "╮" + P.reset);
+      mRows.push(P.dim + "│ " + P.reset + P.bold + P.pink + fit("◆ " + this.modal.title) + P.reset + P.dim + " │" + P.reset);
+      mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
+      const mItems = this.modal.items.slice(0, Math.max(1, viewH - 6));
+      mItems.forEach((it, i) => {
+        const txt = ((i === this.modal.sel ? "❯ " : "  ") + (it.label || "")).slice(0, iw);
+        const colored = i === this.modal.sel
+          ? P.bold + P.pink + "❯ " + P.reset + P.lemon + txt.slice(2) + P.reset
+          : P.dim + txt + P.reset;
+        mRows.push(P.dim + "│ " + P.reset + colored + " ".repeat(Math.max(0, iw - Math.min(txt.length, iw))) + P.dim + " │" + P.reset);
+      });
+      const foot = "↑↓ choisir • Entrée valider • Échap fermer";
+      mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
+      mRows.push(P.dim + "│ " + P.reset + P.dim + fit(foot) + P.reset + P.dim + " │" + P.reset);
+      mRows.push(P.dim + "╰" + "─".repeat(mw - 2) + "╯" + P.reset);
+      const mStart = Math.max(0, Math.floor((viewH - mRows.length) / 2));
+      const mLeft = " ".repeat(Math.max(0, Math.floor((W - mw) / 2)));
+      mRows.forEach((r, i) => {
+        const idx = mStart + i;
+        if (idx < visible.length) visible[idx] = { vis: "", out: mLeft + r };
+      });
+    }
+
+    const sid8 = (getSessionId() || "").slice(0, 8);
+    let rawL = `◤ auracode  ${sid8 ? sid8 + "  " : ""}${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}`;
     if (rawL.length > W) rawL = rawL.slice(0, W);
     const rawR = this.quotaText;
     const pad = " ".repeat(Math.max(1, W - rawL.length - rawR.length));
-    const hTitle = P.bold + P.pink + "◆ AuraCode" + P.reset;
-    const hMid = P.lavender + rawL.slice("◆ AuraCode".length) + P.reset;
+    const hTitle = P.bold + P.pink + "◤ auracode" + P.reset;
+    const hMid = P.lavender + rawL.slice("◤ auracode".length) + P.reset;
     const header = hTitle + hMid + pad + P.mint + rawR + P.reset;
 
     let out = "\x1b[?25l\x1b[H";
     out += header + "\x1b[K\n";
-    for (const l of visible) {
-      out += (l ? l.out : "") + "\x1b[K\n";
-    }
+    const sb = (this.sidebar && !this.modal) ? this.sidebarRows(viewH) : null;
+    const msgW = sb ? W - sb.sbW - 1 : W;
+    visible.forEach((l, i) => {
+      let row = l ? l.out : "";
+      if (sb) {
+        const cut = truncVis(row, msgW);
+        const vlen = Math.min(stripAnsi(row).length, msgW);
+        row = cut + " ".repeat(Math.max(0, msgW - vlen)) + P.dim + "▏" + P.reset + (sb.rows[i] || "");
+      }
+      out += row + "\x1b[K\n";
+    });
     compItems.forEach((it, i) => {
       const sel = i === this.completion.sel;
       out += (sel ? P.bold + P.pink + "> " + P.lemon + it.display + P.reset : P.dim + "  " + it.display + P.reset) + "\x1b[K\n";
     });
 
-    let cursorCol = -1;
+    let cursorCol = -1, cursorRowOff = 0;
     if (this.confirmState) {
       const q = (`? ${this.confirmState.q} [o/N]`).slice(0, W - 4);
       out += "│ " + P.lemon + q + P.reset + " ".repeat(Math.max(0, W - 4 - q.length)) + " │" + "\x1b[K\n";
     } else {
-      const boxTitle = "─ Écris ton message… ";
+      let boxTitle = "─ Écris ton message… (Ctrl+J = ligne, @fichier) ";
+      if (inR.rows.length > inR.shown.length) boxTitle = `─ ↑↓ ${inR.start + 1}-${inR.start + inR.shown.length}/${inR.rows.length} ─ `;
       out += P.dim + "╭" + boxTitle + "─".repeat(Math.max(0, W - 2 - boxTitle.length)) + "╮" + P.reset + "\x1b[K\n";
-      const fieldW = W - 4;
-      if (this.cursor < this.offset) this.offset = this.cursor;
-      if (this.cursor - this.offset >= fieldW) this.offset = this.cursor - fieldW + 1;
-      if (this.offset < 0) this.offset = 0;
-      const vis = this.input.slice(this.offset, this.offset + fieldW);
-      out += "│ " + P.bold + P.pink + "> " + P.reset + vis + " ".repeat(Math.max(0, fieldW - vis.length)) + " │" + "\x1b[K\n";
+      inR.shown.forEach((r, i) => {
+        const gi = inR.start + i;
+        const pre = gi === 0 ? "> " : "  ";
+        out += "│ " + P.bold + P.pink + pre + P.reset + r.text + " ".repeat(Math.max(0, fieldW - r.text.length)) + " │" + "\x1b[K\n";
+        if (gi === inR.crow) { cursorCol = 4 + inR.ccol; cursorRowOff = i; }
+      });
       out += P.dim + "╰" + "─".repeat(Math.max(0, W - 2)) + "╯" + P.reset + "\x1b[K\n";
-      cursorCol = 4 + (this.cursor - this.offset);
     }
 
     let sL, sR = "";
+    const br = gitBranch();
+    const cwd = path.basename(process.cwd()) || process.cwd();
     if (this.updateAvailable) {
-      sL = `Mise à jour ${this.updateAvailable} dispo — tape /update`;
+      sL = `↓ MAJ ${this.updateAvailable} • /update`;
     } else if (this.busy && this.thinkSec !== null && this.thinkSec !== undefined) {
-      sL = `Aura réfléchit... ${this.thinkSec.toFixed(0)}s`;
+      sL = `Aura réfléchit... ${this.thinkSec.toFixed(0)}s (Échap = stop)`;
     } else if (this.busy) {
-      sL = "Travail en cours...";
+      sL = "Travail en cours... (Échap = stop)";
     } else {
-      sL = "/ = commandes • PgUp/PgDn = défiler • Ctrl+C = quitter";
+      sL = `${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}`;
     }
-    if (this.scroll > 0) sR = "PgDn : bas";
-    if (this.updateAvailable) sR = "Tape /update";
+    const rParts = [this.quotaText, br ? `⎇ ${br}` : "", cwd].filter(Boolean);
+    sR = rParts.join(" • ");
+    if (this.scroll > 0) sR += (sR ? " • " : "") + "PgDn : bas";
+    if (this.updateAvailable && !this.busy) sR += (sR ? " • " : "") + "Tape /update";
     let sLine = sL;
     if (sR) sLine += " ".repeat(Math.max(1, W - sL.length - sR.length)) + sR;
     if (sLine.length > W) sLine = sLine.slice(0, W);
@@ -753,7 +1037,7 @@ class Screen {
     process.stdout.write(out);
 
     if (cursorCol >= 0) {
-      const inputRow = 1 + viewH + compH + 2;
+      const inputRow = viewH + compH + 2 + cursorRowOff;
       process.stdout.write(`\x1b[${inputRow + 1};${cursorCol + 1}H\x1b[?25h`);
     }
   }
@@ -778,6 +1062,19 @@ class Screen {
         return;
       }
     }
+    const before = this.input.slice(0, this.cursor);
+    const ma = /(^|[\s(])@([\w.\-/]*)$/.exec(before);
+    if (ma) {
+      const frag = ma[2].toLowerCase();
+      const head = before.slice(0, before.length - ma[2].length);
+      const tail = this.input.slice(this.cursor);
+      const items = scanFiles()
+        .filter((f) => f.toLowerCase().includes(frag))
+        .slice(0, 8)
+        .map((f) => ({ insert: head + f + " " + tail, cursor: (head + f + " ").length, display: "@" + f }));
+      this.completion = items.length ? { items, sel: 0 } : null;
+      return;
+    }
     this.completion = null;
   }
 
@@ -785,7 +1082,7 @@ class Screen {
     if (!this.completion || !this.completion.items.length) return false;
     const it = this.completion.items[Math.min(this.completion.sel, this.completion.items.length - 1)];
     this.input = it.insert;
-    this.cursor = this.input.length;
+    this.cursor = it.cursor != null ? Math.min(it.cursor, this.input.length) : this.input.length;
     this.updateCompletion();
     this.render();
     return true;
@@ -818,7 +1115,8 @@ class Screen {
     this.completion = null;
     if (!line) { this.render(); return; }
     if (this.hist[this.hist.length - 1] !== line) this.hist.push(line);
-    if (this.hist.length > 100) this.hist.shift();
+    if (this.hist.length > 200) this.hist.splice(0, this.hist.length - 200);
+    try { saveJson(HIST_FILE, this.hist); } catch { /* ignore */ }
     this.histIdx = -1;
     this.input = "";
     this.cursor = 0;
@@ -833,11 +1131,59 @@ class Screen {
     if (key.ctrl && (key.name === "c" || key.name === "d")) { this.quit(); return; }
     if (key.name === "pageup") { this.stuck = false; this.scroll += 5; this.render(); return; }
     if (key.name === "pagedown") { this.stuck = false; this.scroll = Math.max(0, this.scroll - 5); this.render(); return; }
-    if (this.busy || this.typeTimer) return;
+    if (this.modal) {
+      const n = this.modal.items.length || 1;
+      if (key.name === "up") { this.modal.sel = (this.modal.sel - 1 + n) % n; this.render(); return; }
+      if (key.name === "down") { this.modal.sel = (this.modal.sel + 1) % n; this.render(); return; }
+      if (key.name === "return" || key.name === "tab") {
+        const it = this.modal.items[this.modal.sel];
+        const cb = this.modal.onPick;
+        this.modal = null;
+        if (cb) cb(it ? it.value : null);
+        else this.render();
+        return;
+      }
+      if (key.name === "escape") {
+        const cb = this.modal.onPick;
+        this.modal = null;
+        if (cb) cb(null);
+        else this.render();
+        return;
+      }
+      return;
+    }
+    if (this.sidebar && key.meta && str && /^[1-9]$/.test(str)) {
+      this.switchSession(parseInt(str, 10) - 1);
+      return;
+    }
     if (this.confirmState) {
       const c = (str || "").toLowerCase();
       if (c === "y" || c === "o") this.resolveConfirm(true);
       else if (c === "n" || key.name === "escape" || key.name === "return") this.resolveConfirm(false);
+      return;
+    }
+    if (this.busy || this.typeTimer) {
+      if (key.name === "escape") {
+        if (this.typeTimer && this.typingMsg) {
+          this.typingMsg.text = this.typingMsg.full;
+          clearInterval(this.typeTimer);
+          this.typeTimer = null;
+          this.typingMsg = null;
+          this.render();
+        } else if (this.busy) {
+          this.cancelled = true;
+          try { if (this.abort) this.abort.abort(); } catch { /* ignore */ }
+        }
+      }
+      return;
+    }
+    if (key.ctrl && key.name === "p") { this.openPalette(); return; }
+    if (key.name === "f1") { this.openHelp(); return; }
+    if (key.name === "f2") { this.toggleSidebar(); return; }
+    if (str === "\n" || (key.meta && key.name === "return")) {
+      this.input = this.input.slice(0, this.cursor) + "\n" + this.input.slice(this.cursor);
+      this.cursor++;
+      this.onEdit();
       return;
     }
     switch (key.name) {
@@ -876,7 +1222,8 @@ class Screen {
         return;
       case "tab": this.acceptCompletion(); return;
       case "escape":
-        if (this.completion) { this.completion = null; this.render(); }
+        if (this.sidebar) { this.sidebar = false; this.render(); }
+        else if (this.completion) { this.completion = null; this.render(); }
         else if (this.input) { this.input = ""; this.cursor = 0; this.render(); }
         return;
     }
@@ -896,14 +1243,28 @@ async function runTUI(state, updateAvailable) {
   const screen = new Screen(state, updateAvailable);
 
   screen.onLine = async (line) => {
+    if (screen.pendingWrite && line !== "/end") {
+      screen.pendingWrite.lines.push(line);
+      screen.render();
+      return;
+    }
+    let skipPush = false;
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.slice(1).split(" ");
       const arg = rest.join(" ").trim();
       const MODELS = ["aura-1.1", "aura-1.2", "aura-1.1-code"];
       const EFFORTS = ["low", "middle", "high", "xhigh"];
+      const LANGS = ["fr", "en"];
       const saveCfg = () => saveJson(CONFIG_FILE, {
         apiKey: state.key, model: state.model, effort: state.effort,
+        lang: state.lang, theme: state.theme,
       });
+      const pickModal = (title, options, current, apply) => {
+        screen.openModal(title, options.map((o) => ({ label: o + (o === current ? "  ● actuel" : ""), value: o })), (v) => {
+          if (!v) { screen.render(); return; }
+          apply(v);
+        });
+      };
       switch (cmd) {
         case "exit": case "quit": case "q": screen.quit(); return;
         case "help":
@@ -920,14 +1281,28 @@ async function runTUI(state, updateAvailable) {
           } catch (e) { screen.sys("Erreur : " + e.message); }
           return;
         case "model":
-          if (!arg) { screen.sys("Modèle actuel : " + state.model + " (valides : " + MODELS.join(", ") + ")"); return; }
+          if (!arg) {
+            pickModal("Modèle", MODELS, state.model, (v) => {
+              state.model = v; saveCfg();
+              screen.sys("Modèle : " + v);
+              screen.render();
+            });
+            return;
+          }
           if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
           state.model = arg; saveCfg();
           screen.sys("Modèle : " + arg);
           screen.render();
           return;
         case "effort":
-          if (!arg) { screen.sys("Effort actuel : " + state.effort + " (valides : " + EFFORTS.join(", ") + ")"); return; }
+          if (!arg) {
+            pickModal("Effort", EFFORTS, state.effort, (v) => {
+              state.effort = v; saveCfg();
+              screen.sys("Effort : " + v);
+              screen.render();
+            });
+            return;
+          }
           if (!EFFORTS.includes(arg)) { screen.sys("Effort inconnu. Valides : " + EFFORTS.join(", ")); return; }
           state.effort = arg; saveCfg();
           screen.sys("Effort : " + arg);
@@ -958,10 +1333,11 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "copy": {
-          const last = [...screen.messages].reverse().find((m) => m.role === "assistant" && m.text.trim());
+          const n = Math.max(1, parseInt(arg, 10) || 1);
+          const lasts = screen.messages.filter((m) => m.role === "assistant" && (m.text || "").trim());
+          const last = lasts[lasts.length - n];
           if (!last) { screen.sys("Rien à copier."); return; }
           try {
-            const { execSync } = require("child_process");
             if (process.platform === "win32") execSync("clip", { input: last.text });
             else if (process.platform === "darwin") execSync("pbcopy", { input: last.text });
             else execSync("xclip -selection clipboard", { input: last.text });
@@ -972,7 +1348,7 @@ async function runTUI(state, updateAvailable) {
         case "export": {
           const fname = arg || "aura-export.md";
           const md = "# Conversation AuraCode\n\n" + screen.messages.map((m) =>
-            m.role === "user" ? `**Toi :** ${m.text}` : m.role === "assistant" ? `**Aura :** ${m.text}` : `_${m.text}_`
+            m.role === "user" ? `**Toi :** ${m.text}` : m.role === "assistant" ? `**Aura :** ${m.text}` : m.role === "tool" ? `⚙ ${m.name} : ${(m.output || "").slice(0, 500)}` : `_${m.text}_`
           ).join("\n\n");
           try {
             const fp = path.resolve(process.cwd(), fname);
@@ -983,13 +1359,201 @@ async function runTUI(state, updateAvailable) {
         }
         case "theme": {
           const names = Object.keys(THEMES);
-          if (!arg) { screen.sys("Thème actuel : " + (state.theme || "pastel") + " (dispos : " + names.join(", ") + ")"); return; }
+          if (!arg) {
+            pickModal("Thème", names, state.theme || "pastel", (v) => {
+              Object.assign(P, THEMES[v]);
+              state.theme = v;
+              saveCfg();
+              screen.sys("Thème : " + v);
+              screen.render();
+            });
+            return;
+          }
           if (!THEMES[arg]) { screen.sys("Thème inconnu. Dispos : " + names.join(", ")); return; }
           Object.assign(P, THEMES[arg]);
           state.theme = arg;
-          saveJson(CONFIG_FILE, { apiKey: state.key, model: state.model, effort: state.effort, theme: arg });
+          saveCfg();
           screen.sys("Thème : " + arg);
           screen.render();
+          return;
+        }
+        case "lang": {
+          if (!arg) {
+            pickModal("Langue", LANGS, state.lang || "fr", (v) => {
+              state.lang = v; saveCfg();
+              screen.sys("Langue : " + v);
+              screen.render();
+            });
+            return;
+          }
+          if (!LANGS.includes(arg)) { screen.sys("Langue inconnue. Valides : fr, en"); return; }
+          state.lang = arg; saveCfg();
+          screen.sys("Langue : " + arg);
+          screen.render();
+          return;
+        }
+        case "sessions": {
+          await screen.toggleSidebar();
+          return;
+        }
+        case "retry": {
+          if (!screen.lastPrompt) { screen.sys("Rien à relancer."); return; }
+          for (let i = screen.messages.length - 1; i >= 0; i--) {
+            if (screen.messages[i].role === "assistant") { screen.messages.splice(i, 1); break; }
+          }
+          line = screen.lastPrompt;
+          skipPush = true;
+          break;
+        }
+        case "compact": {
+          const n = Math.max(2, Math.min(100, parseInt(arg, 10) || 20));
+          if (screen.messages.length > n) screen.messages.splice(0, screen.messages.length - n);
+          screen.sys(`Historique compacté : ${n} derniers blocs.`);
+          screen.render();
+          return;
+        }
+        case "stats": {
+          const users = screen.messages.filter((m) => m.role === "user").length;
+          const bots = screen.messages.filter((m) => m.role === "assistant").length;
+          const tools = screen.messages.filter((m) => m.role === "tool").length;
+          screen.sys(`Session ${(getSessionId() || "—").slice(0, 8)} • ${screen.messages.length} blocs (${users} toi / ${bots} Aura / ${tools} outils)`);
+          screen.sys(`${state.model} • ${state.effort} • ${state.lang || "fr"} • ${screen.quotaText || "quota ?"}`);
+          return;
+        }
+        case "doctor": {
+          screen.busy = true; screen.render();
+          try {
+            const h = await (await fetch(API + "/health", { signal: AbortSignal.timeout(8000) })).json().catch(() => ({}));
+            screen.sys(h.status === "ok" ? `API ${API} : OK` : `API ${API} : réponse inattendue`);
+          } catch (e) { screen.sys("API injoignable : " + e.message); }
+          try {
+            const ms = await (await fetch(API + "/api/models", { signal: AbortSignal.timeout(8000) })).json().catch(() => []);
+            const arr = Array.isArray(ms) ? ms : ms.models || [];
+            screen.sys("Modèles : " + (arr.map((m) => m.id || m).join(", ") || "?"));
+          } catch (e) { screen.sys("Modèles : ? (" + e.message + ")"); }
+          screen.sys("Clé : " + (state.key ? "présente" : "absente (auracode login)"));
+          screen.sys(`Node ${process.version} • ${process.platform} • ${process.cwd()}`);
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "bash": {
+          if (!arg) { screen.sys("Usage : /bash <commande>"); return; }
+          screen.sys("$ " + arg);
+          if (!(await screen.confirm("Exécuter ?"))) { screen.sys("Annulé."); return; }
+          const t0 = Date.now();
+          const res = await shellOut(arg);
+          screen.tool("bash", true, (Date.now() - t0) / 1000, "$ " + arg + "\n" + res);
+          return;
+        }
+        case "read": {
+          if (!arg) { screen.sys("Usage : /read <chemin>"); return; }
+          try {
+            const abs = inside(arg);
+            const content = fs.readFileSync(abs, "utf8").slice(0, 6000);
+            screen.tool("read " + arg, true, null, content);
+          } catch (e) { screen.tool("read " + arg, false, null, e.message); }
+          return;
+        }
+        case "ls": {
+          try {
+            const dir = inside(arg || ".");
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            screen.tool("ls " + (arg || "."), true, null, entries.map((e) => (e.isDirectory() ? e.name + "/" : e.name)).join("\n") || "(vide)");
+          } catch (e) { screen.tool("ls", false, null, e.message); }
+          return;
+        }
+        case "write": {
+          if (!arg) { screen.sys("Usage : /write <chemin>  (puis ton texte, /end pour sauver)"); return; }
+          try { inside(arg); } catch (e) { screen.sys("Refusé : " + e.message); return; }
+          screen.pendingWrite = { path: arg, lines: [] };
+          screen.sys(`Écriture de ${arg} — envoie le contenu (même multiligne), termine par /end.`);
+          screen.render();
+          return;
+        }
+        case "end": {
+          const pw = screen.pendingWrite;
+          if (!pw) { screen.sys("Rien en cours d'écriture."); return; }
+          screen.pendingWrite = null;
+          const content = pw.lines.join("\n");
+          const abs = path.resolve(process.cwd(), pw.path);
+          try {
+            inside(pw.path);
+            let existed = false, prev = "";
+            try { prev = fs.readFileSync(abs, "utf8"); existed = true; } catch { /* nouveau */ }
+            fs.mkdirSync(path.dirname(abs), { recursive: true });
+            fs.writeFileSync(abs, content);
+            screen.undoStack.push({ path: pw.path, existed, content: prev });
+            if (screen.undoStack.length > 10) screen.undoStack.shift();
+            screen.tool("write " + pw.path, true, null, `${content.length} caractères écrits (/undo pour annuler)`);
+          } catch (e) { screen.tool("write " + pw.path, false, null, e.message); }
+          return;
+        }
+        case "run": {
+          let blk = null;
+          for (let i = screen.messages.length - 1; i >= 0; i--) {
+            const m = screen.messages[i];
+            if (m.role !== "assistant") continue;
+            const mm = /```(\w*)\n([\s\S]*?)```/.exec(m.text || "");
+            if (mm) { blk = { lang: (mm[1] || "").toLowerCase(), code: mm[2] }; break; }
+          }
+          if (!blk) { screen.sys("Aucun bloc de code à exécuter."); return; }
+          screen.sys(`Bloc ${blk.lang || "?"} détecté (${blk.code.length} caractères).`);
+          if (!(await screen.confirm("Exécuter ?"))) { screen.sys("Annulé."); return; }
+          const runners = {
+            js: ["node", ".js"], javascript: ["node", ".js"],
+            py: ["python", ".py"], python: ["python", ".py"],
+            ps1: ["powershell", ".ps1"], powershell: ["powershell", ".ps1"],
+            sh: ["bash", ".sh"], bash: ["bash", ".sh"],
+          };
+          const r = runners[blk.lang];
+          if (!r) { screen.sys("Langage non exécutable ici — utilise /bash pour forcer."); return; }
+          const tmp = path.join(os.tmpdir(), `aura-run-${Date.now()}${r[1]}`);
+          try {
+            fs.writeFileSync(tmp, blk.code);
+            const t0 = Date.now();
+            const res = await shellOut(`${r[0]} "${tmp}"`);
+            screen.tool("run " + blk.lang, true, (Date.now() - t0) / 1000, res);
+          } catch (e) { screen.tool("run", false, null, e.message); }
+          finally { try { fs.unlinkSync(tmp); } catch { /* ignore */ } }
+          return;
+        }
+        case "undo": {
+          const u = screen.undoStack.pop();
+          if (!u) { screen.sys("Rien à annuler."); return; }
+          try {
+            if (!u.existed) fs.unlinkSync(path.resolve(process.cwd(), u.path));
+            else fs.writeFileSync(path.resolve(process.cwd(), u.path), u.content);
+            screen.sys("Annulé : " + u.path);
+          } catch (e) { screen.sys("Undo impossible : " + e.message); }
+          screen.render();
+          return;
+        }
+        case "search": {
+          if (!arg) { screen.sys("Usage : /search <motif> [dossier]"); return; }
+          const [pattern, dir] = arg.split(/\s+/);
+          try {
+            const t0 = Date.now();
+            const res = await TOOLS.search.run({ pattern, path: dir || "." });
+            screen.tool("search", true, (Date.now() - t0) / 1000, res);
+          } catch (e) { screen.tool("search", false, null, e.message); }
+          return;
+        }
+        case "open": {
+          if (!arg) { screen.sys("Usage : /open <chemin>"); return; }
+          try {
+            const res = await TOOLS.open_file.run({ path: arg }, {
+              confirm: (q) => screen.confirm(q),
+              sys: (t) => screen.sys(t),
+            });
+            screen.sys(res);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "sysinfo": {
+          try {
+            const res = await TOOLS.sysinfo.run({});
+            screen.tool("sysinfo", true, null, res);
+          } catch (e) { screen.tool("sysinfo", false, null, e.message); }
           return;
         }
         case "update": {
@@ -1003,22 +1567,40 @@ async function runTUI(state, updateAvailable) {
           return;
       }
     }
-    screen.messages.push({ role: "user", text: line, time: timeStr() });
+    const { display, send } = expandMentions(line);
+    if (!skipPush) screen.messages.push({ role: "user", text: display, time: timeStr() });
+    screen.lastPrompt = send;
     screen.busy = true;
+    screen.cancelled = false;
+    screen.abort = new AbortController();
     screen.render();
     const ui = {
       sys: (t, dim) => screen.sys(t),
       assistant: (t) => screen.assistant(t),
       thinking: (s) => screen.thinking(s),
       confirm: (q) => screen.confirm(q),
+      tool: (name, ok, ms, output) => screen.tool(name, ok, ms, output),
+      cancelled: () => screen.cancelled,
+      signal: screen.abort.signal,
     };
+    const t0 = Date.now();
     try {
-      await agentTurn(line, state.key, state.model, state.effort, ui);
+      await agentTurn(send, state.key, state.model, state.effort, ui, state.lang || "fr");
     } catch (e) {
-      const d = e.data || {};
-      screen.sys(d.quota_exceeded ? (d.error || "Quota épuisé.") : `Erreur (${e.status || "?"}) : ${e.message}`);
+      if (e && e.name === "AbortError") screen.sys("Interrompu (Échap).");
+      else {
+        const d = e.data || {};
+        screen.sys(d.quota_exceeded ? (d.error || "Quota épuisé.") : `Erreur (${e.status || "?"}) : ${e.message}`);
+      }
+    }
+    const ms = (Date.now() - t0) / 1000;
+    for (let i = screen.messages.length - 1; i >= 0; i--) {
+      const m = screen.messages[i];
+      if (m.role === "assistant" && !m.meta) { m.meta = { ms, tok: Math.max(1, Math.round((m.text || "").length / 4)) }; break; }
+      if (m.role === "user") break;
     }
     screen.busy = false;
+    screen.abort = null;
     await screen.refreshQuota();
     screen.render();
   };
@@ -1047,14 +1629,15 @@ async function main() {
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
-  Plein écran : /new /model /effort /quota /image /copy /export /theme /update /clear /help (/ = suggestions)\n`);
+  Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/ = suggestions, @fichier, Ctrl+P palette, F1 aide)\n`);
     return;
   }
-  let model = "aura-1.1-code", effort = "high";
+  let model = "aura-1.1-code", effort = "high", lang = "fr";
   try {
     const saved = loadJson(CONFIG_FILE, {});
     if (saved.model) model = saved.model;
     if (saved.effort) effort = saved.effort;
+    if (saved.lang) lang = saved.lang;
   } catch { /* config absente, défauts */ }
   const mi = args.indexOf("--model");
   if (mi >= 0 && args[mi + 1]) model = args[mi + 1];
@@ -1127,7 +1710,7 @@ async function main() {
     return;
   }
   // ---------- Mode plein écran ----------
-  const state = { key, model, effort, theme: "pastel" };
+  const state = { key, model, effort, lang, theme: "pastel" };
   try {
     const savedTheme = loadJson(CONFIG_FILE, {}).theme;
     if (savedTheme && THEMES[savedTheme]) {
