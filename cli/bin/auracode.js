@@ -13,7 +13,7 @@ const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.4.1" };
+const PKG = { version: "0.6.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -49,6 +49,14 @@ function pastelBox(title, lines) {
   (lines || []).forEach((l) => console.log("  " + l));
   console.log(bar);
 }
+
+// Thèmes de couleur (pastel par défaut, modifiables avec /theme).
+const THEMES = {
+  pastel: { pink: "\x1b[38;2;255;179;199m", mint: "\x1b[38;2;150;230;190m", lavender: "\x1b[38;2;190;190;235m", peach: "\x1b[38;2;255;200;150m", sky: "\x1b[38;2;160;210;250m", lemon: "\x1b[38;2;255;240;170m", dim: "\x1b[38;2;170;170;180m" },
+  sunset: { pink: "\x1b[38;2;255;107;107m", mint: "\x1b[38;2;255;209;102m", lavender: "\x1b[38;2;244;162;97m", peach: "\x1b[38;2;231;111;81m", sky: "\x1b[38;2;233;196;106m", lemon: "\x1b[38;2;244;162;97m", dim: "\x1b[38;2;150;150;150m" },
+  ocean: { pink: "\x1b[38;2;72;202;228m", mint: "\x1b[38;2;144;224;239m", lavender: "\x1b[38;2;119;141;169m", peach: "\x1b[38;2;100;223;223m", sky: "\x1b[38;2;0;187;249m", lemon: "\x1b[38;2;128;255;219m", dim: "\x1b[38;2;140;140;140m" },
+  mono: { pink: "\x1b[37m", mint: "\x1b[37m", lavender: "\x1b[37m", peach: "\x1b[37m", sky: "\x1b[37m", lemon: "\x1b[37m", dim: "\x1b[90m" },
+};
 
 function loadJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, "utf8")); }
@@ -86,59 +94,69 @@ async function checkUpdate() {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 4000);
-    const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
+    const r = await fetch("https://raw.githubusercontent.com/Grungyyt/auracode/main/cli/package.json", {
       signal: ctrl.signal,
       headers: { "User-Agent": "auracode" },
     });
     clearTimeout(t);
     if (!r.ok) return;
-    const latest = ((await r.json()).tag_name || "").replace(/^v/, "");
+    const latest = (await r.json()).version;
     if (latest && latest !== PKG.version) {
-      console.log(`\nNouvelle version ${latest} disponible (tu as ${PKG.version}).`);
-      if (process.platform === "win32" && /auracode\.exe$/i.test(process.execPath)) {
-        console.log("Mise à jour : lance `auracode update`\n");
-      } else {
-        console.log("Mise à jour : npm i -g auracode@latest\n");
-      }
+      console.log(`\nNouvelle version ${latest} disponible (tu as ${PKG.version}) : lance \`auracode update\`\n`);
     }
   } catch { /* silencieux */ }
 }
 
-// Mise à jour auto du .exe (Windows) : télécharge la release et remplace le binaire.
+// Mise à jour : mode .exe via releases GitHub, mode script via fichiers du repo.
 async function selfUpdate() {
-  if (process.platform !== "win32" || !/auracode\.exe$/i.test(process.execPath)) {
-    console.log("Mise à jour auto réservée à la version .exe.\nSinon : npm i -g auracode@latest");
+  const isExe = process.platform === "win32" && /auracode\.exe$/i.test(process.execPath);
+  if (isExe) {
+    console.log("Recherche de mise à jour...");
+    const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
+      headers: { "User-Agent": "auracode" },
+    });
+    if (!r.ok) { console.log("Impossible de contacter GitHub."); return; }
+    const rel = await r.json();
+    const latest = (rel.tag_name || "").replace(/^v/, "");
+    if (!latest || latest === PKG.version) {
+      console.log("Déjà à jour (" + PKG.version + ").");
+      return;
+    }
+    const asset = (rel.assets || []).find((a) => /auracode.*\.exe$/i.test(a.name));
+    if (!asset) { console.log("Aucun .exe dans la release " + rel.tag_name); return; }
+    const exePath = process.execPath;
+    const tmp = exePath + ".new";
+    console.log("Téléchargement " + latest + "...");
+    const dl = await fetch(asset.browser_download_url, { headers: { "User-Agent": "auracode" } });
+    fs.writeFileSync(tmp, Buffer.from(await dl.arrayBuffer()));
+    const ps = [
+      "$p='" + exePath + "'; $n='" + tmp + "'; $i=0;",
+      "while ((Test-Path $p) -and ($i -lt 120)) { try { Move-Item -Force $n $p; break } catch { Start-Sleep -Milliseconds 500 }; $i++ }",
+      "Start-Process $p;",
+    ].join(" ");
+    const { spawn } = require("child_process");
+    spawn("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], {
+      detached: true, stdio: "ignore",
+    }).unref();
+    console.log("Mise à jour installée, redémarrage...");
+    setTimeout(() => process.exit(0), 600);
     return;
   }
-  console.log("Recherche de mise à jour...");
-  const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
-    headers: { "User-Agent": "auracode" },
-  });
-  if (!r.ok) { console.log("Impossible de contacter GitHub."); return; }
-  const rel = await r.json();
-  const latest = (rel.tag_name || "").replace(/^v/, "");
-  if (!latest || latest === PKG.version) {
+  // Mode script (install.ps1 / npm link) : re-télécharge les fichiers du repo.
+  console.log("Mise à jour depuis GitHub...");
+  const base = "https://raw.githubusercontent.com/Grungyyt/auracode/main";
+  const head = { "User-Agent": "auracode" };
+  const rp = await (await fetch(base + "/cli/package.json", { headers: head })).json();
+  if (!rp.version || rp.version === PKG.version) {
     console.log("Déjà à jour (" + PKG.version + ").");
     return;
   }
-  const asset = (rel.assets || []).find((a) => /auracode.*\.exe$/i.test(a.name));
-  if (!asset) { console.log("Aucun .exe dans la release " + rel.tag_name); return; }
-  const exePath = process.execPath;
-  const tmp = exePath + ".new";
-  console.log("Téléchargement " + latest + "...");
-  const dl = await fetch(asset.browser_download_url, { headers: { "User-Agent": "auracode" } });
-  fs.writeFileSync(tmp, Buffer.from(await dl.arrayBuffer()));
-  const ps = [
-    "$p='" + exePath + "'; $n='" + tmp + "'; $i=0;",
-    "while ((Test-Path $p) -and ($i -lt 120)) { try { Move-Item -Force $n $p; break } catch { Start-Sleep -Milliseconds 500 }; $i++ }",
-    "Start-Process $p;",
-  ].join(" ");
-  const { spawn } = require("child_process");
-  spawn("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], {
-    detached: true, stdio: "ignore",
-  }).unref();
-  console.log("Mise à jour installée, redémarrage...");
-  setTimeout(() => process.exit(0), 600);
+  const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
+  if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
+  const dir = path.dirname(__filename);
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
+  fs.writeFileSync(__filename, js);
+  console.log("Mis à jour vers " + rp.version + ". Relance auracode.");
 }
 
 async function api(pathname, body, key, method = "POST") {
@@ -460,10 +478,18 @@ const COMMANDS = [
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/quota", desc: "Afficher ton quota global" },
   { name: "/image", desc: "Générer une image : /image <texte>" },
+  { name: "/copy", desc: "Copier la dernière réponse" },
+  { name: "/export", desc: "Sauver la conversation en markdown" },
+  { name: "/theme", desc: "Changer de thème de couleur" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
 ];
+
+const timeStr = () => {
+  try { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+  catch { return ""; }
+};
 
 function wrapText(text, width) {
   const out = [];
@@ -502,6 +528,7 @@ class Screen {
     this.draft = "";
     this.done = null;
     this.onLine = null;
+    this.typeTimer = null;
     this.boundKey = null;
     this.boundResize = null;
   }
@@ -520,6 +547,7 @@ class Screen {
 
   stop() {
     try {
+      if (this.typeTimer) { clearInterval(this.typeTimer); this.typeTimer = null; }
       process.stdout.write("\x1b[?25h");
       if (this.boundKey) process.stdin.removeListener("keypress", this.boundKey);
       if (this.boundResize) process.stdout.removeListener("resize", this.boundResize);
@@ -547,8 +575,19 @@ class Screen {
   }
 
   assistant(text) {
-    this.messages.push({ role: "assistant", text: String(text) });
+    const m = { role: "assistant", text: "", full: String(text), time: timeStr() };
+    this.messages.push(m);
     if (this.messages.length > 300) this.messages.splice(0, this.messages.length - 300);
+    if (this.typeTimer) clearInterval(this.typeTimer);
+    this.typeTimer = setInterval(() => {
+      const next = Math.min(m.full.length, m.text.length + 40);
+      m.text = m.full.slice(0, next);
+      this.render();
+      if (next >= m.full.length) {
+        clearInterval(this.typeTimer);
+        this.typeTimer = null;
+      }
+    }, 40);
     this.render();
   }
 
@@ -586,15 +625,39 @@ class Screen {
     const W = this.W, H = this.H;
     const compItems = this.completion ? this.completion.items.slice(0, 6) : [];
     const compH = compItems.length;
-    const viewH = Math.max(3, H - 3 - compH);
+    const viewH = Math.max(3, H - 5 - compH);
 
-    const msgW = Math.max(20, W - 6);
+    const boxW = Math.min(64, Math.max(26, W - 8));
+    const innerW = boxW - 4;
     const lines = [];
+    const push = (vis, out) => lines.push({ vis, out: out === undefined ? vis : out });
     for (const m of this.messages) {
-      const color = m.role === "user" ? P.sky : m.role === "assistant" ? P.mint : P.dim;
-      const mark = m.role === "user" ? "> " : m.role === "assistant" ? "~ " : "· ";
-      const wrapped = wrapText(m.text, msgW);
-      wrapped.forEach((wl, i) => lines.push({ pre: i === 0 ? mark : "  ", color, text: wl }));
+      if (m.role === "system") {
+        for (const wl of wrapText("· " + m.text, Math.max(20, W - 8))) {
+          const pad = " ".repeat(Math.max(0, Math.floor((W - wl.length) / 2)));
+          push(pad + wl, P.dim + pad + wl + P.reset);
+        }
+        push("", "");
+        continue;
+      }
+      const mine = m.role === "user";
+      const nameColor = mine ? P.sky : P.mint;
+      const border = mine ? P.pink : P.mint;
+      const wrapped = [];
+      for (const wl of wrapText(m.text, innerW)) wrapped.push(wl);
+      if (!wrapped.length) wrapped.push("");
+      const bw = Math.min(innerW, Math.max(...wrapped.map((l) => l.length)));
+      const padEnd = (s) => s + " ".repeat(Math.max(0, bw - s.length));
+      const top = "╭" + "─".repeat(bw + 2) + "╮";
+      const bot = "╰" + "─".repeat(bw + 2) + "╯";
+      const headPlain = `${mine ? "Toi" : "Aura"} • ${m.time || ""}`;
+      const headOut = nameColor + P.bold + headPlain + P.reset;
+      const rowsV = [headPlain, top, ...wrapped.map((wl) => `│ ${padEnd(wl)} │`), bot, ""];
+      const rowsO = [headOut, border + top + P.reset, ...wrapped.map((wl) => border + "│ " + P.reset + padEnd(wl) + border + " │" + P.reset), border + bot + P.reset, ""];
+      rowsV.forEach((v, i) => {
+        const left = mine ? " ".repeat(Math.max(0, W - v.length - 1)) : " ";
+        push(left + v, left + rowsO[i]);
+      });
     }
     const total = lines.length;
     const maxScroll = Math.max(0, total - viewH);
@@ -615,8 +678,7 @@ class Screen {
     let out = "\x1b[?25l\x1b[H";
     out += header + "\x1b[K\n";
     for (const l of visible) {
-      out += l ? l.color + l.pre + P.reset + l.text : "";
-      out += "\x1b[K\n";
+      out += (l ? l.out : "") + "\x1b[K\n";
     }
     compItems.forEach((it, i) => {
       const sel = i === this.completion.sel;
@@ -625,14 +687,19 @@ class Screen {
 
     let cursorCol = -1;
     if (this.confirmState) {
-      out += P.lemon + this.confirmState.q + P.reset + " [o/N] " + "\x1b[K\n";
+      const q = (`? ${this.confirmState.q} [o/N]`).slice(0, W - 4);
+      out += "│ " + P.lemon + q + P.reset + " ".repeat(Math.max(0, W - 4 - q.length)) + " │" + "\x1b[K\n";
     } else {
-      const fieldW = W - 2;
+      const boxTitle = "─ Écris ton message… ";
+      out += P.dim + "╭" + boxTitle + "─".repeat(Math.max(0, W - 2 - boxTitle.length)) + "╮" + P.reset + "\x1b[K\n";
+      const fieldW = W - 4;
       if (this.cursor < this.offset) this.offset = this.cursor;
       if (this.cursor - this.offset >= fieldW) this.offset = this.cursor - fieldW + 1;
       if (this.offset < 0) this.offset = 0;
-      out += P.bold + P.pink + "> " + P.reset + this.input.slice(this.offset, this.offset + fieldW) + "\x1b[K\n";
-      cursorCol = 2 + (this.cursor - this.offset);
+      const vis = this.input.slice(this.offset, this.offset + fieldW);
+      out += "│ " + P.bold + P.pink + "> " + P.reset + vis + " ".repeat(Math.max(0, fieldW - vis.length)) + " │" + "\x1b[K\n";
+      out += P.dim + "╰" + "─".repeat(Math.max(0, W - 2)) + "╯" + P.reset + "\x1b[K\n";
+      cursorCol = 4 + (this.cursor - this.offset);
     }
 
     let sL, sR = "";
@@ -652,7 +719,7 @@ class Screen {
     process.stdout.write(out);
 
     if (cursorCol >= 0) {
-      const inputRow = 1 + viewH + compH + 1;
+      const inputRow = 1 + viewH + compH + 2;
       process.stdout.write(`\x1b[${inputRow + 1};${cursorCol + 1}H\x1b[?25h`);
     }
   }
@@ -732,7 +799,7 @@ class Screen {
     if (key.ctrl && (key.name === "c" || key.name === "d")) { this.quit(); return; }
     if (key.name === "pageup") { this.stuck = false; this.scroll += 5; this.render(); return; }
     if (key.name === "pagedown") { this.stuck = false; this.scroll = Math.max(0, this.scroll - 5); this.render(); return; }
-    if (this.busy) return;
+    if (this.busy || this.typeTimer) return;
     if (this.confirmState) {
       const c = (str || "").toLowerCase();
       if (c === "y" || c === "o") this.resolveConfirm(true);
@@ -856,12 +923,47 @@ async function runTUI(state) {
           screen.render();
           return;
         }
+        case "copy": {
+          const last = [...screen.messages].reverse().find((m) => m.role === "assistant" && m.text.trim());
+          if (!last) { screen.sys("Rien à copier."); return; }
+          try {
+            const { execSync } = require("child_process");
+            if (process.platform === "win32") execSync("clip", { input: last.text });
+            else if (process.platform === "darwin") execSync("pbcopy", { input: last.text });
+            else execSync("xclip -selection clipboard", { input: last.text });
+            screen.sys("Réponse copiée.");
+          } catch (e) { screen.sys("Copie impossible : " + e.message); }
+          return;
+        }
+        case "export": {
+          const fname = arg || "aura-export.md";
+          const md = "# Conversation AuraCode\n\n" + screen.messages.map((m) =>
+            m.role === "user" ? `**Toi :** ${m.text}` : m.role === "assistant" ? `**Aura :** ${m.text}` : `_${m.text}_`
+          ).join("\n\n");
+          try {
+            const fp = path.resolve(process.cwd(), fname);
+            fs.writeFileSync(fp, md);
+            screen.sys("Exporté : " + fp);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "theme": {
+          const names = Object.keys(THEMES);
+          if (!arg) { screen.sys("Thème actuel : " + (state.theme || "pastel") + " (dispos : " + names.join(", ") + ")"); return; }
+          if (!THEMES[arg]) { screen.sys("Thème inconnu. Dispos : " + names.join(", ")); return; }
+          Object.assign(P, THEMES[arg]);
+          state.theme = arg;
+          saveJson(CONFIG_FILE, { apiKey: state.key, model: state.model, effort: state.effort, theme: arg });
+          screen.sys("Thème : " + arg);
+          screen.render();
+          return;
+        }
         default:
           screen.sys("Commande inconnue, /help pour la liste.");
           return;
       }
     }
-    screen.messages.push({ role: "user", text: line });
+    screen.messages.push({ role: "user", text: line, time: timeStr() });
     screen.busy = true;
     screen.render();
     const ui = {
@@ -895,7 +997,8 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  Plein écran : /new /model /effort /quota /image /clear /help (/ = suggestions)\n`);
+    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+  Plein écran : /new /model /effort /quota /image /copy /export /theme /clear /help (/ = suggestions)\n`);
     return;
   }
   let model = "aura-1.1-code", effort = "high";
@@ -942,6 +1045,23 @@ async function main() {
     await selfUpdate();
     return;
   }
+  const first = args[0];
+  if (first && !["login", "logout", "new", "setup", "update"].includes(first) && !first.startsWith("-")) {
+    // Mode one-shot : auracode "ma question" → réponse directe, sans interface.
+    const q = args.join(" ");
+    let key = getKey();
+    if (!key) { console.log("Pas connecté. Lance : auracode login"); return; }
+    let sid = getSessionId();
+    try {
+      if (!sid) sid = await newSession(key, model);
+      const d = await api("/api/chat", { message: q, session_id: sid, model, effort }, key);
+      console.log("\n" + (d.reply || "").trim() + "\n");
+    } catch (e) {
+      const er = e.data || {};
+      console.log(er.quota_exceeded ? (er.error || "Quota épuisé.") : "Erreur (" + (e.status || "?") + ") : " + e.message);
+    }
+    return;
+  }
 
   await intro();
   checkUpdate();
@@ -959,7 +1079,14 @@ async function main() {
     return;
   }
   // ---------- Mode plein écran ----------
-  const state = { key, model, effort };
+  const state = { key, model, effort, theme: "pastel" };
+  try {
+    const savedTheme = loadJson(CONFIG_FILE, {}).theme;
+    if (savedTheme && THEMES[savedTheme]) {
+      Object.assign(P, THEMES[savedTheme]);
+      state.theme = savedTheme;
+    }
+  } catch { /* défaut pastel */ }
   await runTUI(state);
   return;
 
