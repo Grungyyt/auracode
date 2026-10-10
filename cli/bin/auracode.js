@@ -14,7 +14,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.2" };
+const PKG = { version: "0.8.3" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -306,9 +306,10 @@ const TOOLS = {
   },
 };
 
-const SYSTEM = `Tu es AuraCode, un agent qui pilote le PC de l'utilisateur via des outils. Réponds en français, concis.
+const SYSTEM = `Tu es AuraCode, un agent qui pilote DIRECTEMENT le PC de l'utilisateur via des outils. Ce n'est pas une simulation : quand tu émets un bloc outil, le programme l'exécute vraiment sur le PC puis te renvoie le résultat. Réponds en français, concis.
 Pour agir, réponds UNIQUEMENT avec un bloc outil (une action à la fois) :
 <tool name="NOM">{"arg": "valeur"}</tool>
+Exemple : <tool name="write_file">{"path": "C:/Users/test.txt", "content": "coucou"}</tool>
 Outils disponibles :
 - read_file {"path"} : lire un fichier
 - list_dir {"path"?} : lister un dossier
@@ -319,7 +320,7 @@ Outils disponibles :
 - sysinfo {} : infos du PC (OS, CPU, RAM)
 - Accès COMPLET au PC : tous les disques et dossiers, chemins relatifs OU absolus (ex C:/Docs/fichier.txt, D:/projet).
 - Le dossier actuel et l'OS sont rappelés dans chaque demande ([Contexte PC]) : utilise-les pour construire tes chemins.
-Règles : une seule action par réponse. Quand tu as fini, réponds normalement SANS bloc outil. Ne refuse jamais d'agir.`;
+Règles : une seule action par réponse. Quand tu as fini, réponds normalement SANS bloc outil. Quand l'utilisateur demande une action sur son PC (créer/lire/modifier un fichier ou dossier, exécuter une commande), tu DOIS émettre un bloc outil : ne dis JAMAIS que tu ne peux pas créer de fichiers, que tu es un chatbot web ou que l'utilisateur doit le faire lui-même.`;
 
 function extractTool(text) {
   const m = /<tool\s+name="([^"]+)">([\s\S]*?)<\/tool>/.exec(text || "");
@@ -345,7 +346,9 @@ async function timedCall(fn, onTick) {
 
 async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   let sessionId = getSessionId();
-  prompt = `[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]\n` + prompt;
+  // Le serveur a son propre prompt système générique : on injecte le protocole
+  // d'outils + le contexte PC dans le premier message, sinon le modèle refuse d'agir.
+  prompt = SYSTEM + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]\nDemande de l'utilisateur : ` + prompt;
   const callChat = async (sid, hist) =>
     api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: hist }, key, "POST", ui.signal);
 
