@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.2.0" };
+const PKG = { version: "1.2.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -168,10 +168,28 @@ function uninstallCmds(dir, wipeData) {
   return cmds.join("; ");
 }
 
-const AURA13_AD = "✨ Aura 1.3 arrive vendredi 18 à 17h — 14B, le nouveau flagship";
+const AURA13_LAUNCH_ISO = "2026-12-18T16:00:00+00:00"; // 17h Paris
+const AURA13_LAUNCH_LABEL = "vendredi 18 à 17h";
+const AURA13_WAIT_URL = "https://ai.vth-mc.fr/?error=try-to-use-1.3";
+const aura13Locked = () => {
+  try {
+    const t = Date.parse(AURA13_LAUNCH_ISO);
+    return Number.isFinite(t) && Date.now() < t;
+  } catch { return false; }
+};
+const aura13Countdown = () => {
+  const ms = Math.max(0, Date.parse(AURA13_LAUNCH_ISO) - Date.now());
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const hh = String(Math.floor((s % 86400) / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${d}j ${hh}:${mm}:${ss}`;
+};
 function adLine(W) {
-  const pad = " ".repeat(Math.max(0, Math.floor((W - AURA13_AD.length) / 2)));
-  return pad + P.bold + P.butter + AURA13_AD + P.reset;
+  const txt = aura13Locked() ? `✨ Aura 1.3 dans ${aura13Countdown()} — ${AURA13_LAUNCH_LABEL}` : "✨ Aura 1.3 est là — /model aura-1.3 !";
+  const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
+  return pad + P.bold + P.butter + txt + P.reset;
 }
 
 function brandLine(W) {
@@ -1908,6 +1926,13 @@ async function runTUI(state, updateAvailable) {
             return;
           }
           if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
+          if (arg === "aura-1.3" && aura13Locked()) {
+            screen.sys(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
+            screen.sys("Ouverture de la page d'attente...");
+            openBrowser(AURA13_WAIT_URL);
+            screen.render();
+            return;
+          }
           state.model = arg; saveCfg();
           screen.sys("Modèle : " + arg);
           screen.render();
@@ -2986,7 +3011,11 @@ async function runTUI(state, updateAvailable) {
       if (e && e.name === "AbortError") screen.sys("Interrompu (Échap).");
       else {
         const d = e.data || {};
-        screen.sys(d.quota_exceeded ? (d.error || "Quota épuisé.") : `Erreur (${e.status || "?"}) : ${e.message}`);
+        const lockHit = state.model === "aura-1.3" || /aura 1\.3/i.test(String(d.hint || "") + " " + String(d.error || ""));
+        if (lockHit && aura13Locked()) {
+          screen.sys(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
+          openBrowser(AURA13_WAIT_URL);
+        } else screen.sys(d.quota_exceeded ? (d.error || "Quota épuisé.") : `Erreur (${e.status || "?"}) : ${e.message}`);
       }
     }
     const ms = (Date.now() - t0) / 1000;
@@ -3205,7 +3234,11 @@ async function main() {
       console.log("\n" + (d.reply || "").trim() + "\n");
     } catch (e) {
       const er = e.data || {};
-      console.log(er.quota_exceeded ? (er.error || "Quota épuisé.") : "Erreur (" + (e.status || "?") + ") : " + e.message);
+      const lockHit = /aura 1\.3/i.test(String(er.hint || "") + " " + String(er.error || ""));
+      if (lockHit && aura13Locked()) {
+        console.log(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
+        openBrowser(AURA13_WAIT_URL);
+      } else console.log(er.quota_exceeded ? (er.error || "Quota épuisé.") : "Erreur (" + (e.status || "?") + ") : " + e.message);
     }
     return;
   }
