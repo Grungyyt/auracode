@@ -7,14 +7,76 @@ const os = require("os");
 const path = require("path");
 const readline = require("readline");
 const { exec, execSync } = require("child_process");
+const crypto = require("crypto");
 
 const API = process.env.AURA_API || "https://api.ia.vth-mc.fr";
 const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
+
+// ---------- Auth VTH (OAuth service AuraCode) ----------
+// La CLÉ PRIVÉE ne vit QUE sur le VPS (jamais dans ce fichier public).
+// Le CLI obtient access/refresh via le VPS (/api/auth/exchange).
+const VTH_FILE = path.join(HOME, "vth.json");
+const AURA_PUBLIC_ID = process.env.AURA_PUBLIC_ID || "N8FjCur0OABUofZBIwBibnEMTN9RrA4F";
+const AURA_AUTH_BASE = (process.env.AURA_AUTH_BASE || "https://auth.vth-mc.fr").replace(/\/$/, "");
+const AURA_LOGIN_PORT = parseInt(process.env.AURA_LOGIN_PORT || "3000", 10) || 3000;
+const loadVth = () => loadJson(VTH_FILE, {});
+const saveVth = (o) => saveJson(VTH_FILE, o);
+const clearVth = () => { try { fs.unlinkSync(VTH_FILE); } catch { /* ignore */ } };
+let vthCurrent = null; // access token en cours (évite les doubles refresh)
+const isVthToken = (k) => typeof k === "string" && k.startsWith("vth-acc.");
+// State CSRF 32 chars (doc VTH : lettres, chiffres, - et _).
+const newState32 = () => {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const b = crypto.randomBytes(32);
+  let s = "";
+  for (let i = 0; i < b.length && s.length < 32; i++) s += A[b[i] % 64];
+  if (s.length < 32) throw new Error("state trop court");
+  return s;
+};
+const vthAuthorizeUrl = (state) =>
+  `${AURA_AUTH_BASE}/authorize?public_token=${encodeURIComponent(AURA_PUBLIC_ID)}&state=${encodeURIComponent(state)}`;
+function openBrowser(url) {
+  try {
+    const plat = process.platform;
+    const cmd = plat === "win32" ? `start "" "${url}"` : plat === "darwin" ? `open "${url}"` : `xdg-open "${url}"`;
+    exec(cmd, { timeout: 10000 }, () => {});
+  } catch { /* ignore */ }
+}
+// Résout un access token : mémoire -> fichier -> refresh via VPS.
+async function vthAccess() {
+  if (vthCurrent) return vthCurrent;
+  const v = loadVth();
+  if (v && v.access_token) { vthCurrent = v.access_token; return vthCurrent; }
+  if (v && v.refresh_token) return refreshVth();
+  return null;
+}
+let refreshP = null;
+async function refreshVth() {
+  if (refreshP) return refreshP;
+  refreshP = (async () => {
+    try {
+      const v = loadVth();
+      if (!v || !v.refresh_token) return null;
+      const r = await fetch(API + "/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: v.refresh_token }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j.access_token) { clearVth(); vthCurrent = null; return null; }
+      saveVth({ access_token: j.access_token, refresh_token: j.refresh_token || v.refresh_token, obtained_at: Date.now() });
+      vthCurrent = j.access_token;
+      return vthCurrent;
+    } catch { return null; }
+    finally { refreshP = null; }
+  })();
+  return refreshP;
+}
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.6" };
+const PKG = { version: "0.8.7" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -218,12 +280,17 @@ async function selfUpdate(quiet = false) {
 }
 
 async function api(pathname, body, key, method = "POST", signal = undefined) {
-  const res = await fetch(API + pathname, {
+  const doFetch = (k) => fetch(API + pathname, {
     method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${k}` },
     ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
     ...(signal ? { signal } : {}),
   });
+  let res = await doFetch(isVthToken(key) && vthCurrent ? vthCurrent : key);
+  if (res.status === 401 && isVthToken(key) && !(signal && signal.aborted)) {
+    const fresh = await refreshVth();
+    if (fresh && fresh !== key) res = await doFetch(fresh);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error || ("HTTP " + res.status));
@@ -1692,11 +1759,87 @@ async function runTUI(state, updateAvailable) {
   clearInterval(updTimer);
 }
 
+// Login OAuth : serveur local http://127.0.0.1:3000/login -> VTH authorize
+// -> callback locale -> échange via le VPS (la clé privée ne quitte jamais le serveur).
+async function cmdLoginOAuth() {
+  const http = require("http");
+  const state = newState32();
+  let used = false;
+  let finish = null;
+  let timer = null;
+  const page = (title, body) => `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family:system-ui,sans-serif;background:#f5f2eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0"><div style="background:#fff;border-radius:16px;padding:40px 48px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.08);max-width:420px"><h1 style="margin:0 0 8px">AuraCode</h1><p style="color:#666">${body}</p></div></body></html>`;
+  const server = http.createServer(async (req, res) => {
+    try {
+      const u = new URL(req.url || "/", "http://127.0.0.1");
+      if (u.pathname === "/login") {
+        const authUrl = vthAuthorizeUrl(state);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(page("AuraCode — Connexion", `Connecte-toi avec ton compte VTH.<br><br><a href="${authUrl.replace(/&/g, "&amp;")}" style="display:inline-block;background:#c15f3c;color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600">Se connecter avec VTH</a>`));
+        return;
+      }
+      if (u.pathname === "/auracode/auth/callback") {
+        const st = u.searchParams.get("state") || "";
+        const code = u.searchParams.get("secretCode") || "";
+        const same = st.length > 0 && st.length === state.length && crypto.timingSafeEqual(Buffer.from(st), Buffer.from(state));
+        if (used || !same || !code) {
+          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(page("Échec", "Session invalide ou expirée. Relance <code>auracode login</code> dans ton terminal."));
+          finish(null);
+          return;
+        }
+        used = true;
+        try {
+          const r = await fetch(API + "/api/auth/exchange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!j.access_token) throw new Error(j.error || ("HTTP " + r.status));
+          saveVth({ access_token: j.access_token, refresh_token: j.refresh_token || null, obtained_at: Date.now() });
+          vthCurrent = j.access_token;
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(page("Connecté ✓", "Ton compte VTH est lié. Retourne dans ton terminal, c'est prêt."));
+          finish(true);
+        } catch (e) {
+          res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(page("Échec", "Échange impossible : " + String((e && e.message) || e)));
+          finish(null);
+        }
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("?");
+    } catch {
+      try { res.writeHead(500); res.end("?"); } catch { /* ignore */ }
+    }
+  });
+  const ok = await new Promise((resolve) => {
+    finish = (v) => {
+      if (timer) clearTimeout(timer);
+      try { server.closeAllConnections(); } catch { /* ignore */ }
+      try { server.close(); } catch { /* ignore */ }
+      resolve(v);
+    };
+    timer = setTimeout(() => finish(null), 10 * 60 * 1000);
+    server.on("error", (e) => {
+      console.log("Port 3000 occupé ou réseau local bloqué (" + ((e && e.message) || e) + "). Libère le port puis réessaie.");
+      finish(null);
+    });
+    server.listen(AURA_LOGIN_PORT, "127.0.0.1", () => {
+      const url = `http://127.0.0.1:${AURA_LOGIN_PORT}/login`;
+      console.log("Ouvre cette page si le navigateur ne s'ouvre pas :\n" + url + "\n");
+      openBrowser(url);
+    });
+  });
+  return !!ok;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/ = suggestions, @fichier, Ctrl+P palette, F1 aide)\n`);
     return;
   }
@@ -1713,15 +1856,10 @@ async function main() {
   if (ei >= 0 && args[ei + 1]) effort = args[ei + 1];
 
   if (args[0] === "login") {
-    const keysUrl = process.env.AURA_KEYS_URL || "https://ia.vth-mc.fr/profile/dev";
-    console.log("1. Connecte-toi avec VTH Auth ici : " + keysUrl);
-    try {
-      const plat = process.platform;
-      const cmd = plat === "win32" ? `start "" "${keysUrl}"` : plat === "darwin" ? `open "${keysUrl}"` : `xdg-open "${keysUrl}"`;
-      exec(cmd, { timeout: 10000 }, () => {});
-      console.log("(ouverture du navigateur...)");
-    } catch { /* ignore */ }
-    console.log("2. Copie ta clé ak-vth-... (section Clés API IA) et colle-la ci-dessous.\n");
+    console.log("Connexion via VTH Auth (navigateur)...\n");
+    const ok = await cmdLoginOAuth();
+    if (ok) { console.log("Connecté ✓ (compte VTH lié, conversations synchronisées avec le web)"); return; }
+    console.log("Navigateur indisponible ou délai dépassé — colle une clé ak-vth-... :");
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question("Colle ta clé API : ", (k) => {
       k = k.trim();
@@ -1736,7 +1874,8 @@ async function main() {
   if (args[0] === "logout") {
     const cfg = loadJson(CONFIG_FILE, {});
     delete cfg.apiKey; saveJson(CONFIG_FILE, cfg);
-    console.log("Déconnecté.");
+    clearVth(); vthCurrent = null;
+    console.log("Déconnecté (clé API + compte VTH oubliés).");
     return;
   }
   if (args[0] === "setup") {
@@ -1744,7 +1883,7 @@ async function main() {
     return;
   }
   if (args[0] === "new") {
-    const key = getKey();
+    const key = getKey() || await vthAccess() || "";
     if (!key) { console.log("Pas connecté. Lance : auracode login"); return; }
     const id = await newSession(key, model);
     console.log("Nouvelle conversation : " + id);
@@ -1758,7 +1897,7 @@ async function main() {
   if (first && !["login", "logout", "new", "setup", "update"].includes(first) && !first.startsWith("-")) {
     // Mode one-shot : auracode "ma question" → réponse directe, sans interface.
     const q = args.join(" ");
-    let key = getKey();
+    let key = getKey() || await vthAccess() || "";
     if (!key) { console.log("Pas connecté. Lance : auracode login"); return; }
     let sid = getSessionId();
     try {
@@ -1773,15 +1912,30 @@ async function main() {
   }
 
   const updateAvailable = await splash();
-  let key = getKey();
+  let key = getKey() || await vthAccess() || "";
   if (!key) {
     console.log(pastel("peach", "Aucune configuration détectée — lancement de l'installation.\n"));
     await cmdSetup();
-    key = getKey();
+    key = getKey() || await vthAccess() || "";
     if (!key) return;
   }
   try {
-    if (!getSessionId()) await newSession(key, model);
+    if (!getSessionId()) {
+      // Sync inter-comptes : reprend la dernière conversation du serveur (web ↔ CLI
+      // partagent les mêmes sessions) au lieu d'en créer une neuve à chaque dossier.
+      let synced = false;
+      try {
+        const d = await api("/api/sessions", null, key, "GET");
+        const list = d.sessions || [];
+        if (list.length) {
+          const s = list[list.length - 1];
+          setSessionId(s.session_id);
+          if (s.model) model = s.model;
+          synced = true;
+        }
+      } catch { /* ignore */ }
+      if (!synced) await newSession(key, model);
+    }
   } catch (e) {
     console.log("Erreur API (" + (e.status || "?") + ") : " + e.message);
     return;
