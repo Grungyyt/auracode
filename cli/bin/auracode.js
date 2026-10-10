@@ -14,7 +14,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.0" };
+const PKG = { version: "0.8.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -218,12 +218,10 @@ async function newSession(key, model) {
 }
 
 // ---------- Outils locaux (le PC) ----------
+// Accès complet au PC : résout le chemin (relatif au projet ou absolu).
+// Les écritures / exécutions demandent toujours confirmation (ui.confirm).
 function inside(p) {
-  const abs = path.resolve(process.cwd(), p);
-  if (abs !== process.cwd() && !abs.startsWith(process.cwd() + path.sep)) {
-    throw new Error("Refusé : hors du dossier projet.");
-  }
-  return abs;
+  return path.resolve(process.cwd(), p);
 }
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
@@ -579,7 +577,7 @@ const gitBranch = () => {
 // Remplace @chemin par le contenu du fichier (max 8 Ko, 3 fichiers).
 const expandMentions = (line) => {
   let n = 0;
-  const send = String(line).replace(/(^|[\s(])@([\w.\-/]+)/g, (m, pre, p) => {
+  const send = String(line).replace(/(^|[\s(])@([\w.\-/:\\]+)/g, (m, pre, p) => {
     if (n >= 3) return m;
     try {
       const abs = inside(p);
@@ -1063,7 +1061,7 @@ class Screen {
       }
     }
     const before = this.input.slice(0, this.cursor);
-    const ma = /(^|[\s(])@([\w.\-/]*)$/.exec(before);
+    const ma = /(^|[\s(])@([\w.\-/:\\]*)$/.exec(before);
     if (ma) {
       const frag = ma[2].toLowerCase();
       const head = before.slice(0, before.length - ma[2].length);
