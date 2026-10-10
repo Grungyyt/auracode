@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.2.1.01" };
+const PKG = { version: "1.2.1.02" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -171,6 +171,15 @@ function uninstallCmds(dir, wipeData) {
 const AURA13_LAUNCH_ISO = "2026-10-18T15:00:00+00:00"; // 17h Paris (été, UTC+2)
 const AURA13_LAUNCH_LABEL = "dimanche 18 octobre à 17h";
 const AURA13_WAIT_URL = "https://ai.vth-mc.fr/?error=try-to-use-1.3";
+// Fenêtre de fête : 3 h après la sortie (splash + feux automatiques).
+const aura13Party = () => {
+  try {
+    const t = Date.parse(AURA13_LAUNCH_ISO);
+    if (!Number.isFinite(t)) return false;
+    const now = Date.now();
+    return now >= t && now < t + 3 * 3600 * 1000;
+  } catch { return false; }
+};
 const aura13Locked = () => {
   try {
     const t = Date.parse(AURA13_LAUNCH_ISO);
@@ -208,6 +217,82 @@ const buildId = () => {
   } catch { BUILD_ID = "dev"; }
   return BUILD_ID;
 };
+
+// 🎆 Feux d'artifice latéraux : fusées + explosion + retombées. Touche = passer.
+const PARTY_COLS = () => [P.pink, P.butter, P.mint, P.aqua, P.lavender, P.lilac, P.lemon, P.coral];
+const PARTY_CH = ["*", "+", "✦", "·", "•", "×"];
+const explodeRocket = (r, cols, chs) => {
+  const sparks = [];
+  const n = 8 + Math.floor(Math.random() * 7);
+  const col = cols[Math.floor(Math.random() * cols.length)];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 0.3 + Math.random() * 0.8;
+    sparks.push({ x: r.x, y: r.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.2, life: 8 + Math.floor(Math.random() * 9), col, ch: chs[Math.floor(Math.random() * chs.length)] });
+  }
+  return sparks;
+};
+async function runFireworks(screen, seconds = 7, title = "🎆 Aura 1.3 est là ! 🎆") {
+  if (!process.stdout.isTTY) return;
+  const W = process.stdout.columns || 80, H = process.stdout.rows || 24;
+  const cols = PARTY_COLS(), chs = PARTY_CH;
+  let rockets = [], sparks = [];
+  let stopped = false;
+  let cleanupKeys = null;
+  if (screen) {
+    screen.celebrating = true;
+  } else if (process.stdin.isTTY) {
+    try {
+      readline.emitKeypressEvents(process.stdin);
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      const onKey = () => { stopped = true; };
+      process.stdin.on("keypress", onKey);
+      cleanupKeys = () => {
+        try { process.stdin.removeListener("keypress", onKey); } catch { /* ignore */ }
+        try { if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* ignore */ }
+        try { process.stdin.pause(); } catch { /* ignore */ }
+      };
+    } catch { /* ignore */ }
+  }
+  const t0 = Date.now();
+  process.stdout.write("\x1b[?25l");
+  try {
+    while (!stopped && !(screen && !screen.celebrating) && Date.now() - t0 < seconds * 1000) {
+      if (rockets.length < 3 && Math.random() < 0.35) {
+        const left = Math.random() < 0.5;
+        rockets.push({ x: left ? 1 + Math.random() * 3 : W - 4 + Math.random() * 3, y: H - 1, vy: -(0.7 + Math.random() * 0.5), fuse: 6 + Math.floor(Math.random() * 6) });
+      }
+      const grid = Array.from({ length: H }, () => new Array(W).fill(" "));
+      const put = (x, y, s) => {
+        const xi = Math.round(x), yi = Math.round(y);
+        if (xi >= 0 && xi < W && yi >= 0 && yi < H) grid[yi][xi] = s;
+      };
+      const nextRockets = [];
+      for (const r of rockets) {
+        r.y += r.vy; r.fuse--;
+        if (r.fuse <= 0 || r.y < H * 0.2) sparks.push(...explodeRocket(r, cols, chs));
+        else { put(r.x, r.y, P.butter + "↑" + P.reset); nextRockets.push(r); }
+      }
+      rockets = nextRockets;
+      sparks = sparks.filter((p) => p.life > 0 && p.y < H && p.x > -2 && p.x < W + 2);
+      for (const p of sparks) {
+        p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
+        put(p.x, p.y, (p.life < 4 ? P.dim : p.col) + p.ch + P.reset);
+      }
+      const ti = Math.floor(W / 2 - title.length / 2);
+      for (let i = 0; i < title.length && ti + i < W; i++) {
+        if (ti + i >= 0) grid[Math.floor(H / 2)][ti + i] = P.bold + P.butter + title[i] + P.reset;
+      }
+      process.stdout.write("\x1b[H" + grid.map((row) => row.join("")).join("\n"));
+      await sleep(110);
+    }
+  } finally {
+    if (screen) screen.celebrating = false;
+    if (cleanupKeys) cleanupKeys();
+    process.stdout.write("\x1b[?25h");
+  }
+}
 
 async function splash() {
   // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
@@ -1172,6 +1257,7 @@ const COMMANDS = [
   { name: "/lorem", desc: "Faux texte : /lorem [n]" },
   { name: "/rainbow", desc: "Texte arc-en-ciel" },
   { name: "/cowsay", desc: "Vache qui parle" },
+  { name: "/feux-artifice-test", desc: "Feux d'artifice (admin)" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
@@ -1225,6 +1311,7 @@ class Screen {
     this.accountCache = {};
     this.pendingWrite = null;
     this.timer = null;
+    this.celebrating = false;
     this.plan = null;
     this.jobs = [];
     this.jobSeq = 0;
@@ -1766,6 +1853,7 @@ class Screen {
     if (key.ctrl && (key.name === "c" || key.name === "d")) { this.quit(); return; }
     if (key.name === "pageup") { this.stuck = false; this.scroll += 5; this.render(); return; }
     if (key.name === "pagedown") { this.stuck = false; this.scroll = Math.max(0, this.scroll - 5); this.render(); return; }
+    if (this.celebrating) { this.celebrating = false; return; }
     if (this.modal) {
       const n = this.modal.items.length || 1;
       if (key.name === "up") { this.modal.sel = (this.modal.sel - 1 + n) % n; this.render(); return; }
@@ -2983,6 +3071,19 @@ async function runTUI(state, updateAvailable) {
           screen.busy = false; screen.render();
           return;
         }
+        case "feux-artifice-test":
+        case "feux-artice-test": {
+          let admin = false;
+          try {
+            const me = await api("/api/me", null, state.key, "GET");
+            admin = !!(me && me.is_admin);
+          } catch (e) { screen.sys("Vérification impossible : " + e.message); return; }
+          if (!admin) { screen.sys("Réservé aux admins."); return; }
+          screen.sys("🎆 Test admin — Échap pour passer.");
+          await runFireworks(screen, 8, "🎆 Test Aura 1.3 🎆");
+          screen.render();
+          return;
+        }
         default:
           screen.sys("Commande inconnue, /help pour la liste.");
           return;
@@ -3244,6 +3345,10 @@ async function main() {
   }
 
   const updateAvailable = await splash();
+  if (aura13Party()) {
+    console.log("🎆 Aura 1.3 est sortie ! Célébration... (touche pour passer)");
+    await runFireworks(null, 7, "🎆 Aura 1.3 est là ! 🎆");
+  }
   let key = getKey() || await vthAccess() || "";
   if (!key) {
     // Connexion sans rien taper : navigateur d'abord, setup manuel en secours.
