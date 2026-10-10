@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.2.1" };
+const PKG = { version: "1.2.1.01" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -168,8 +168,8 @@ function uninstallCmds(dir, wipeData) {
   return cmds.join("; ");
 }
 
-const AURA13_LAUNCH_ISO = "2026-12-18T16:00:00+00:00"; // 17h Paris
-const AURA13_LAUNCH_LABEL = "vendredi 18 à 17h";
+const AURA13_LAUNCH_ISO = "2026-10-18T15:00:00+00:00"; // 17h Paris (été, UTC+2)
+const AURA13_LAUNCH_LABEL = "dimanche 18 octobre à 17h";
 const AURA13_WAIT_URL = "https://ai.vth-mc.fr/?error=try-to-use-1.3";
 const aura13Locked = () => {
   try {
@@ -676,7 +676,7 @@ async function cmdSetup() {
   const model = await choose("Étape 2/3 — Choisis ton modèle", [
     { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
     { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
-    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM) • 🔒 ven. 18 17h" },
+    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM) • 🔒 dim. 18 oct. 17h" },
     { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
   ]);
   if (!model) { console.log("Annulé."); rl.close(); return; }
