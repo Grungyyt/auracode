@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.9" };
+const PKG = { version: "0.8.10" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -744,6 +744,7 @@ const COMMANDS = [
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
   { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono"] },
   { name: "/sessions", desc: "Panneau des conversations (F2)" },
+  { name: "/account", desc: "Panneau du compte (F3)" },
   { name: "/retry", desc: "Relancer la dernière réponse" },
   { name: "/compact", desc: "Garder les N derniers blocs (/compact 20)" },
   { name: "/stats", desc: "Stats de la session" },
@@ -812,6 +813,8 @@ class Screen {
     this.modal = null;
     this.sidebar = false;
     this.sessionsCache = [];
+    this.account = false;
+    this.accountCache = {};
     this.pendingWrite = null;
     this.lastPrompt = null;
     this.cancelled = false;
@@ -911,7 +914,7 @@ class Screen {
   openHelp() {
     const rows = [
       "↑↓ historique • Tab compléter • Ctrl+J saut de ligne",
-      "Ctrl+P palette • F1 aide • F2 sessions • Alt+1-9 switch",
+      "Ctrl+P palette • F1 aide • F2 sessions • F3 compte • Alt+1-9 switch",
       "PgUp/PgDn défiler • Échap annuler • Ctrl+C quitter",
       "@fichier joindre un fichier • /help commandes",
     ];
@@ -921,12 +924,46 @@ class Screen {
   async toggleSidebar() {
     this.sidebar = !this.sidebar;
     if (this.sidebar) {
+      this.account = false;
       try {
         const d = await api("/api/sessions", null, this.state.key, "GET");
         this.sessionsCache = (d.sessions || []).slice(-9);
       } catch { this.sessionsCache = []; }
     }
     this.render();
+  }
+
+  async toggleAccount() {
+    this.account = !this.account;
+    if (this.account) {
+      this.sidebar = false;
+      try {
+        const me = await api("/api/me", null, this.state.key, "GET");
+        this.accountCache = me || {};
+      } catch { this.accountCache = {}; }
+    }
+    this.render();
+  }
+
+  accountRows(h) {
+    const sbW = Math.min(30, Math.max(20, Math.floor(this.W * 0.3)));
+    const me = this.accountCache || {};
+    const k = this.state.key || "";
+    const keyType = !k ? "—" : k.startsWith("ak-vth-") ? "clé API" : k.startsWith("vth-acc.") ? "compte VTH" : k.startsWith("sk-aura-") ? "master" : "JWT";
+    const rows = [
+      " Compte",
+      "─".repeat(sbW),
+      ` user ${String(me.user_id || "?").slice(0, 18)}`,
+      ` conv ${(getSessionId() || "—").slice(0, 8)} • ${me.sessions ?? "?"} srv`,
+      ` msgs ${me.messages_used ?? "?"}`,
+      ` quota ${String(this.quotaText || "?").slice(0, Math.max(8, sbW - 9))}`,
+      ` ${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}`,
+      ` thème ${this.state.theme || "pastel"} • v${PKG.version}`,
+      ` accès ${keyType}`,
+    ];
+    while (rows.length < h - 1) rows.push("");
+    rows.push("F3 fermer");
+    return { sbW, rows: rows.map((r) => r.slice(0, sbW)) };
   }
 
   async switchSession(i) {
@@ -1117,7 +1154,7 @@ class Screen {
 
     let out = "\x1b[?25l\x1b[H";
     out += header + "\x1b[K\n";
-    const sb = (this.sidebar && !this.modal) ? this.sidebarRows(viewH) : null;
+    const sb = !this.modal ? (this.sidebar ? this.sidebarRows(viewH) : this.account ? this.accountRows(viewH) : null) : null;
     const msgW = sb ? W - sb.sbW - 1 : W;
     visible.forEach((l, i) => {
       let row = l ? l.out : "";
@@ -1317,6 +1354,7 @@ class Screen {
     if (key.ctrl && key.name === "p") { this.openPalette(); return; }
     if (key.name === "f1") { this.openHelp(); return; }
     if (key.name === "f2") { this.toggleSidebar(); return; }
+    if (key.name === "f3") { this.toggleAccount(); return; }
     if (str === "\n" || (key.meta && key.name === "return")) {
       this.input = this.input.slice(0, this.cursor) + "\n" + this.input.slice(this.cursor);
       this.cursor++;
@@ -1359,7 +1397,7 @@ class Screen {
         return;
       case "tab": this.acceptCompletion(); return;
       case "escape":
-        if (this.sidebar) { this.sidebar = false; this.render(); }
+        if (this.sidebar || this.account) { this.sidebar = false; this.account = false; this.render(); }
         else if (this.completion) { this.completion = null; this.render(); }
         else if (this.input) { this.input = ""; this.cursor = 0; this.render(); }
         return;
@@ -1531,6 +1569,10 @@ async function runTUI(state, updateAvailable) {
         }
         case "sessions": {
           await screen.toggleSidebar();
+          return;
+        }
+        case "account": {
+          await screen.toggleAccount();
           return;
         }
         case "retry": {
