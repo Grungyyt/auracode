@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.12" };
+const PKG = { version: "1.0.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -374,13 +374,15 @@ const TOOLS = {
     desc: "Liste un dossier. Args: {path?} (défaut .)",
     run: async ({ path: p = "." }) => fs.readdirSync(inside(p)).join("\n"),
   },
-  write_file: {
-    desc: "Écris un fichier (demande confirmation). Args: {path, content}",
-    run: async ({ path: p, content }, ui) => {
-      const abs = inside(p);
-      ui.sys(`--- Aperçu de ${p} (${(content || "").length} caractères) ---`);
-      ui.sys(String(content || "").slice(0, 1500));
-      ui.sys("--- fin aperçu ---");
+    write_file: {
+      desc: "Écris un fichier (demande confirmation). Args: {path, content}",
+      run: async ({ path: p, content }, ui) => {
+        const abs = inside(p);
+        let old = "";
+        try { old = fs.readFileSync(abs, "utf8"); } catch { /* nouveau fichier */ }
+        ui.sys(`--- ${old ? "Diff" : "Nouveau fichier"} ${p} (${(content || "").length} caractères) ---`);
+        (old ? diffLines(old, content || "").split("\n").slice(0, 25) : String(content || "").split("\n").slice(0, 25)).forEach((l) => ui.sys(l || " "));
+        ui.sys("--- fin aperçu ---");
       if (!(await ui.confirm("Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content || "");
@@ -492,7 +494,7 @@ async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   // le message est stocké tel quel et réaffiché sur le web, sans le protocole).
   const userAsk = prompt;
   const home = os.homedir();
-  const preamble = SYSTEM + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
+  const preamble = SYSTEM + (() => { try { const pz = String(loadJson(CONFIG_FILE, {}).persona || "").trim().slice(0, 2000); return pz ? `\n\n[Persona utilisateur : ${pz}]` : ""; } catch { return ""; } })() + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
   const callChat = async (sid, hist) =>
     api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: [{ role: "user", content: preamble }, ...hist] }, key, "POST", ui.signal);
 
@@ -862,6 +864,156 @@ function stopTimer(screen, silent) {
   }
 }
 
+// ---------- Moteurs V1 ----------
+// Diff unifié simplifié (borné) : ["- vieux", "+ neuf", "  ctx", "…"].
+const diffLines = (a, b, ctx = 3, max = 60) => {
+  const A = String(a || "").split("\n"), B = String(b || "").split("\n");
+  const n = Math.min(A.length, 200), m = Math.min(B.length, 200);
+  const aa = A.slice(0, n), bb = B.slice(0, m);
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = aa[i] === bb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (aa[i] === bb[j]) { ops.push([" ", aa[i]]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push(["-", aa[i]]); i++; }
+    else { ops.push(["+", bb[j]]); j++; }
+  }
+  while (i < n) ops.push(["-", aa[i++]]);
+  while (j < m) ops.push(["+", bb[j++]]);
+  if (A.length > 200 || B.length > 200) ops.push(["…", "(tronqué à 200 lignes)"]);
+  const keep = new Set();
+  ops.forEach((o, k) => { if (o[0] !== " ") for (let d = -ctx; d <= ctx; d++) keep.add(k + d); });
+  const out = [];
+  let skipped = false;
+  ops.forEach((o, k) => {
+    if (!keep.has(k)) { if (!skipped) { out.push("…"); skipped = true; } return; }
+    skipped = false;
+    out.push(`${o[0]} ${o[1]}`);
+  });
+  const lines = out.slice(0, max);
+  if (out.length > max) lines.push(`… +${out.length - max} lignes`);
+  return lines.join("\n");
+};
+const paintDiff = (t) => String(t || "").split("\n").map((l) =>
+  l.startsWith("+") ? P.mint + l + P.reset : l.startsWith("-") ? P.coral + l + P.reset : l.startsWith("…") ? P.dim + l + P.reset : l
+).join("\n");
+// Dernier bloc de code d'une conversation : {lang, code} | null.
+const findCodeBlock = (screen) => {
+  for (let i = screen.messages.length - 1; i >= 0; i--) {
+    const m = screen.messages[i];
+    if (m.role !== "assistant") continue;
+    const mm = /```(\w*)\n([\s\S]*?)```/.exec(m.text || "");
+    if (mm) return { lang: (mm[1] || "").toLowerCase(), code: mm[2] };
+  }
+  return null;
+};
+// Appel modèle simple (sans outils) : bulle + méta + quota.
+async function askModel(screen, state, text, model, effort = "middle") {
+  let sid = getSessionId();
+  if (!sid) sid = await newSession(state.key, model);
+  const t0 = Date.now();
+  const d = await api("/api/chat", { message: text, session_id: sid, model, effort }, state.key);
+  const reply = String(d.reply || "").trim() || "(vide)";
+  screen.assistant(reply, { ms: (Date.now() - t0) / 1000, tok: Math.max(1, Math.round(reply.length / 4)) });
+  await screen.refreshQuota();
+}
+const MACROS_FILE = path.join(HOME, "macros.json");
+// Usage disque borné : {bytes, files, capped}.
+const diskUsage = (dir, maxFiles = 3000, maxDepth = 6) => {
+  let bytes = 0, files = 0, stop = false;
+  const walk = (d, depth) => {
+    if (stop || depth > maxDepth) return;
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (stop) return;
+      if (e.name === "node_modules" || e.name === ".git") continue;
+      const full = path.join(d, e.name);
+      try {
+        if (e.isDirectory()) walk(full, depth + 1);
+        else { const st = fs.statSync(full); if (st.isFile()) { bytes += st.size; if (++files >= maxFiles) stop = true; } }
+      } catch { /* ignore */ }
+    }
+  };
+  walk(dir, 0);
+  return { bytes, files, capped: stop };
+};
+// Lignes de code par extension : [[ext, {files, lines}]].
+const countLoc = (dir) => {
+  const exts = {};
+  let files = 0;
+  const walk = (d, depth) => {
+    if (depth > 5 || files > 2000) return;
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name === ".git" || e.name.startsWith(".")) continue;
+      const full = path.join(d, e.name);
+      try {
+        if (e.isDirectory()) walk(full, depth + 1);
+        else if (e.isFile() && /\.(js|ts|tsx|jsx|py|json|md|html|css|txt|yml|yaml|toml|rs|go|java|c|cpp|h|php|rb)$/i.test(e.name)) {
+          const c = fs.readFileSync(full, "utf8");
+          const ext = (e.name.split(".").pop() || "?").toLowerCase();
+          exts[ext] = exts[ext] || { files: 0, lines: 0 };
+          exts[ext].files++; exts[ext].lines += c.split("\n").length; files++;
+        }
+      } catch { /* ignore */ }
+    }
+  };
+  walk(dir, 0);
+  return Object.entries(exts).sort((a, b) => b[1].lines - a[1].lines).slice(0, 10);
+};
+// Arbre de dossiers ASCII.
+const treeStr = (dir, maxDepth = 3) => {
+  const out = [];
+  const walk = (d, depth, prefix) => {
+    if (depth > maxDepth || out.length > 120) return;
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.name !== "node_modules" && e.name !== ".git"); } catch { return; }
+    entries.forEach((e, i) => {
+      const last = i === entries.length - 1;
+      out.push(`${prefix}${last ? "└── " : "├── "}${e.name}${e.isDirectory() ? "/" : ""}`);
+      if (e.isDirectory()) walk(path.join(d, e.name), depth + 1, prefix + (last ? "    " : "│   "));
+    });
+  };
+  walk(dir, 0, "");
+  return out.join("\n");
+};
+// Calendrier ASCII du mois.
+const calMonth = (year, month) => {
+  const first = (new Date(year, month - 1, 1).getDay() + 6) % 7;
+  const days = new Date(year, month, 0).getDate();
+  const rows = [];
+  let week = new Array(first).fill("  ");
+  for (let d = 1; d <= days; d++) {
+    week.push(String(d).padStart(2, " "));
+    if (week.length === 7) { rows.push(week.join(" ")); week = []; }
+  }
+  if (week.length) rows.push(week.join(" "));
+  const name = new Date(year, month - 1, 1).toLocaleString("fr-FR", { month: "long", year: "numeric" });
+  return `${name}\nLu Ma Me Je Ve Sa Di\n${rows.join("\n")}`;
+};
+// Tableau markdown depuis "a,b;c,d".
+const mdTable = (text) => {
+  const rows = String(text || "").split(";").map((r) => r.split(",").map((c) => c.trim()));
+  if (!rows.length || !rows[0].length || !rows[0][0]) throw new Error("Usage : /table <a,b;c,d>");
+  const cols = Math.max(...rows.map((r) => r.length));
+  const norm = rows.map((r) => { const a = r.slice(); while (a.length < cols) a.push(""); return a; });
+  const widths = [];
+  for (let c = 0; c < cols; c++) widths.push(Math.max(...norm.map((r) => r[c].length)));
+  const fmt = (r) => "| " + r.map((v, i) => v.padEnd(widths[i])).join(" | ") + " |";
+  return [fmt(norm[0]), "|" + widths.map((w) => "-".repeat(w + 2)).join("|") + "|", ...norm.slice(1).map(fmt)].join("\n");
+};
+// Vache qui parle.
+const cowSay = (text) => {
+  const msg = String(text || "meuh").slice(0, 200);
+  return [" " + "_".repeat(msg.length + 2), `< ${msg} >`, " " + "-".repeat(msg.length + 2),
+    "        \\   ^__^", "         \\  (oo)\\_______", "            (__)\\       )\\/\\",
+    "                ||----w |", "                ||     ||"].join("\n");
+};
+const slugify = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conversation" },
@@ -878,13 +1030,13 @@ const COMMANDS = [
   { name: "/quota", desc: "Afficher ton quota global" },
   { name: "/image", desc: "Générer une image : /image <texte>" },
   { name: "/bash", desc: "Commande shell (confirmation)" },
-  { name: "/read", desc: "Lire un fichier : /read <chemin>" },
-  { name: "/ls", desc: "Lister un dossier : /ls [dossier]" },
-  { name: "/write", desc: "Écrire un fichier : /write <chemin> … /end" },
+  { name: "/read", desc: "Lire un fichier : /read <chemin>", files: true },
+  { name: "/ls", desc: "Lister un dossier : /ls [dossier]", files: true },
+  { name: "/write", desc: "Écrire un fichier : /write <chemin> … /end", files: true },
   { name: "/run", desc: "Exécuter le dernier bloc de code" },
   { name: "/undo", desc: "Annuler la dernière écriture" },
   { name: "/search", desc: "Chercher du texte : /search <motif>" },
-  { name: "/open", desc: "Ouvrir fichier/dossier" },
+  { name: "/open", desc: "Ouvrir fichier/dossier", files: true },
   { name: "/sysinfo", desc: "Infos du PC" },
   { name: "/copy", desc: "Copier une réponse : /copy [n]" },
   { name: "/export", desc: "Sauver en markdown : /export [fichier]" },
@@ -910,6 +1062,59 @@ const COMMANDS = [
   { name: "/banner", desc: "Logo AuraCode" },
   { name: "/de", desc: "Lancer un dé" },
   { name: "/piece", desc: "Pile ou face" },
+  { name: "/bg", desc: "Tâche shell en fond : /bg <cmd>" },
+  { name: "/jobs", desc: "Tâches de fond" },
+  { name: "/fg", desc: "Voir sortie : /fg <id>" },
+  { name: "/plan", desc: "Plan d'action : /plan <tâche>" },
+  { name: "/go", desc: "Exécute l'étape suivante" },
+  { name: "/goall", desc: "Exécute tout le plan" },
+  { name: "/macro", desc: "Macros : /macro add <nom> <texte>" },
+  { name: "/conv", desc: "Conversations serveur (modale)" },
+  { name: "/review", desc: "Relit du code : /review [fichier]" },
+  { name: "/persona", desc: "Instructions perso : /persona <texte>" },
+  { name: "/compare", desc: "2 modèles, 1 question" },
+  { name: "/head", desc: "Début de fichier : /head [n] <f>" },
+  { name: "/tail", desc: "Fin de fichier : /tail [n] <f>" },
+  { name: "/wc", desc: "Lignes/mots : /wc <f>" },
+  { name: "/diff", desc: "Diff de 2 fichiers" },
+  { name: "/env", desc: "Variables d'environnement" },
+  { name: "/disk", desc: "Poids du dossier" },
+  { name: "/count", desc: "Lignes de code par langage" },
+  { name: "/tree", desc: "Arbre du dossier" },
+  { name: "/recent", desc: "Fichiers récents" },
+  { name: "/zip", desc: "Archive : /zip <src> [dest]" },
+  { name: "/unzip", desc: "Extrait : /unzip <f> [dir]" },
+  { name: "/serve", desc: "Serveur fichiers : /serve [port]" },
+  { name: "/unserve", desc: "Coupe le serveur" },
+  { name: "/explain", desc: "Explique du code : /explain [f]" },
+  { name: "/test", desc: "Lance les tests du projet" },
+  { name: "/git", desc: "État git" },
+  { name: "/commit", desc: "Propose un message de commit" },
+  { name: "/history", desc: "Historique des prompts" },
+  { name: "/share", desc: "Partage la conversation (lien)" },
+  { name: "/uptime", desc: "Durée session + versions" },
+  { name: "/prompt", desc: "Voir le protocole envoyé" },
+  { name: "/fix", desc: "Répare : session, update" },
+  { name: "/date", desc: "Date et heure" },
+  { name: "/uuid", desc: "UUID aléatoire" },
+  { name: "/pass", desc: "Mot de passe sûr : /pass [n]" },
+  { name: "/encode", desc: "Encode : /encode b64|url|hex <t>" },
+  { name: "/decode", desc: "Décode : /decode b64|url|hex <t>" },
+  { name: "/json", desc: "Valide/embellit du JSON" },
+  { name: "/upper", desc: "MAJUSCULES" },
+  { name: "/lower", desc: "minuscules" },
+  { name: "/len", desc: "Taille d'un texte" },
+  { name: "/slug", desc: "Slugifie : /slug <texte>" },
+  { name: "/sort", desc: "Trie : /sort a,b,c" },
+  { name: "/shuffle", desc: "Mélange : /shuffle a,b,c" },
+  { name: "/cal", desc: "Calendrier du mois" },
+  { name: "/chrono", desc: "Chronomètre" },
+  { name: "/table", desc: "Tableau : /table a,b;c,d" },
+  { name: "/tva", desc: "TTC : /tva <prix> [taux]" },
+  { name: "/8ball", desc: "Boule magique" },
+  { name: "/lorem", desc: "Faux texte : /lorem [n]" },
+  { name: "/rainbow", desc: "Texte arc-en-ciel" },
+  { name: "/cowsay", desc: "Vache qui parle" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
@@ -963,6 +1168,13 @@ class Screen {
     this.accountCache = {};
     this.pendingWrite = null;
     this.timer = null;
+    this.plan = null;
+    this.jobs = [];
+    this.jobSeq = 0;
+    this.watchers = [];
+    this.serve = null;
+    this.servePort = 0;
+    this.chronoT = null;
     this.lastPrompt = null;
     this.cancelled = false;
     this.abort = null;
@@ -991,6 +1203,8 @@ class Screen {
     try {
       if (this.typeTimer) { clearInterval(this.typeTimer); this.typeTimer = null; }
       if (this.timer) { try { clearInterval(this.timer.iv); } catch { /* ignore */ } this.timer = null; }
+      try { (this.watchers || []).forEach((w) => { try { w.watcher.close(); } catch { /* ignore */ } }); } catch { /* ignore */ }
+      try { if (this.serve) this.serve.close(); } catch { /* ignore */ }
       process.stdout.write("\x1b[?25h");
       if (this.boundKey) process.stdin.removeListener("keypress", this.boundKey);
       if (this.boundResize) process.stdout.removeListener("resize", this.boundResize);
@@ -1366,6 +1580,7 @@ class Screen {
       const ss = String(Math.floor((left % 60000) / 1000)).padStart(2, "0");
       rParts.push(`⏱ ${mm}:${ss} ${this.timer.label}`);
     }
+    if (this.serve) rParts.push(`srv:${this.servePort}`);
     rParts.push(this.quotaText, br ? `⎇ ${br}` : "", cwd);
     sR = rParts.filter(Boolean).join(" • ");
     if (this.scroll > 0) sR += (sR ? " • " : "") + "PgDn : bas";
@@ -1399,6 +1614,15 @@ class Screen {
         const items = cmd.values
           .filter((v) => v.startsWith(m2[2]))
           .map((v) => ({ insert: `/${m2[1]} ${v}`, display: v }));
+        this.completion = items.length ? { items, sel: 0 } : null;
+        return;
+      }
+      if (cmd && cmd.files) {
+        const frag = m2[2].toLowerCase();
+        const items = scanFiles()
+          .filter((f) => f.toLowerCase().includes(frag))
+          .slice(0, 8)
+          .map((f) => ({ insert: `/${m2[1]} ${f}`, display: f }));
         this.completion = items.length ? { items, sel: 0 } : null;
         return;
       }
@@ -1452,7 +1676,20 @@ class Screen {
   }
 
   submit() {
-    const line = this.input.trim();
+    let line = this.input.trim();
+    if (line.startsWith("!")) {
+      const sp = line.indexOf(" ");
+      const name = sp < 0 ? line.slice(1) : line.slice(1, sp);
+      const rest = sp < 0 ? "" : line.slice(sp + 1);
+      const hit = loadList(MACROS_FILE).find((x) => x.name === name);
+      if (!hit) {
+        this.sys(`Macro inconnue : ${name} (/macro pour la liste)`);
+        this.completion = null; this.input = ""; this.cursor = 0; this.histIdx = -1;
+        this.render();
+        return;
+      }
+      line = (hit.text + " " + rest).trim();
+    }
     this.completion = null;
     if (!line) { this.render(); return; }
     if (this.hist[this.hist.length - 1] !== line) this.hist.push(line);
@@ -1765,8 +2002,33 @@ async function runTUI(state, updateAvailable) {
           break;
         }
         case "compact": {
-          const n = Math.max(2, Math.min(100, parseInt(arg, 10) || 20));
-          if (screen.messages.length > n) screen.messages.splice(0, screen.messages.length - n);
+          const parts = String(arg || "").split(/\s+/).filter(Boolean);
+          const resume = parts.includes("resume");
+          const nn = parseInt(parts.find((p) => /^\d+$/.test(p)) || "", 10);
+          const n = Math.max(2, Math.min(100, nn || 20));
+          if (screen.messages.length <= n) { screen.sys("Rien à compacter."); return; }
+          if (resume) {
+            const dropped = screen.messages.splice(0, screen.messages.length - n);
+            let sid = getSessionId();
+            screen.busy = true; screen.render();
+            try {
+              if (!sid) sid = await newSession(state.key, state.model);
+              const d = await api("/api/chat", {
+                message: "Résume cette conversation en 8 lignes max (faits + décisions, style télégraphique). Réponds QUE le résumé :",
+                session_id: sid, model: "aura-1.1", effort: "low",
+                history: dropped.slice(-12).map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.text || m.output || "").slice(0, 600) })),
+              }, state.key);
+              screen.messages.unshift({ role: "system", text: "📌 Mémoire : " + String(d.reply || "").trim().slice(0, 1200) });
+              screen.sys(`Compacté + résumé (${dropped.length} blocs → mémoire).`);
+            } catch (e) {
+              screen.sys("Résumé impossible (" + e.message + "), compactage simple.");
+            }
+            screen.busy = false;
+            await screen.refreshQuota();
+            screen.render();
+            return;
+          }
+          screen.messages.splice(0, screen.messages.length - n);
           screen.sys(`Historique compacté : ${n} derniers blocs.`);
           screen.render();
           return;
@@ -1849,18 +2111,12 @@ async function runTUI(state, updateAvailable) {
             fs.writeFileSync(abs, content);
             screen.undoStack.push({ path: pw.path, existed, content: prev });
             if (screen.undoStack.length > 10) screen.undoStack.shift();
-            screen.tool("write " + pw.path, true, null, `${content.length} caractères écrits (/undo pour annuler)`);
+            screen.tool("write " + pw.path, true, null, (existed ? paintDiff(diffLines(prev, content)).split("\n").slice(0, 10).join("\n") + "\n" : "") + `${content.length} caractères écrits (/undo pour annuler)`);
           } catch (e) { screen.tool("write " + pw.path, false, null, e.message); }
           return;
         }
         case "run": {
-          let blk = null;
-          for (let i = screen.messages.length - 1; i >= 0; i--) {
-            const m = screen.messages[i];
-            if (m.role !== "assistant") continue;
-            const mm = /```(\w*)\n([\s\S]*?)```/.exec(m.text || "");
-            if (mm) { blk = { lang: (mm[1] || "").toLowerCase(), code: mm[2] }; break; }
-          }
+          const blk = findCodeBlock(screen);
           if (!blk) { screen.sys("Aucun bloc de code à exécuter."); return; }
           screen.sys(`Bloc ${blk.lang || "?"} détecté (${blk.code.length} caractères).`);
           if (!(await screen.confirm("Exécuter ?"))) { screen.sys("Annulé."); return; }
@@ -2113,6 +2369,553 @@ async function runTUI(state, updateAvailable) {
         }
         case "piece": {
           screen.sys(`🪙 ${Math.random() < 0.5 ? "Pile" : "Face"}`);
+          return;
+        }
+        case "head":
+        case "tail": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          let n = 20, p = "";
+          if (parts.length && /^\d+$/.test(parts[0])) { n = Math.max(1, Math.min(200, parseInt(parts[0], 10))); p = parts.slice(1).join(" "); }
+          else p = arg;
+          if (!p) { screen.sys(`Usage : /${cmd} [n] <fichier>`); return; }
+          try {
+            const lines = fs.readFileSync(inside(p), "utf8").split("\n");
+            const sel = cmd === "head" ? lines.slice(0, n) : lines.slice(-n);
+            screen.tool(`${cmd} ${p}`, true, null, sel.join("\n").slice(0, 4000));
+          } catch (e) { screen.tool(cmd, false, null, e.message); }
+          return;
+        }
+        case "wc": {
+          if (!arg) { screen.sys("Usage : /wc <fichier>"); return; }
+          try {
+            const c = fs.readFileSync(inside(arg), "utf8");
+            const words = (c.match(/\S+/g) || []).length;
+            screen.sys(`${arg} : ${c ? c.split("\n").length : 0} lignes • ${words} mots • ${c.length} caractères`);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "diff": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /diff <fichier1> <fichier2>"); return; }
+          try {
+            const a = fs.readFileSync(inside(parts[0]), "utf8");
+            const b = fs.readFileSync(inside(parts.slice(1).join(" ")), "utf8");
+            screen.tool("diff", true, null, paintDiff(diffLines(a, b)));
+          } catch (e) { screen.tool("diff", false, null, e.message); }
+          return;
+        }
+        case "env": {
+          const rows = Object.keys(process.env).sort()
+            .filter((k) => !/^(PATH|Path)$/.test(k)).slice(0, 60)
+            .map((k) => /KEY|TOKEN|SECRET|PASS|PWD|AUTH/i.test(k) ? `${k}=***` : `${k}=${String(process.env[k]).slice(0, 80)}`);
+          screen.tool("env", true, null, rows.join("\n"));
+          return;
+        }
+        case "disk": {
+          const u = diskUsage(process.cwd());
+          screen.sys(`Dossier : ${fmtSize(u.bytes)} • ${u.files} fichiers${u.capped ? " (plafonné)" : ""}`);
+          return;
+        }
+        case "count": {
+          const rows = countLoc(process.cwd());
+          if (!rows.length) { screen.sys("Aucun code détecté."); return; }
+          screen.tool("loc", true, null, rows.map(([ext, s]) => `${ext} — ${s.files} fichiers, ${s.lines} lignes`).join("\n"));
+          return;
+        }
+        case "tree": {
+          const depth = Math.max(1, Math.min(6, parseInt(arg, 10) || 3));
+          screen.tool("tree", true, null, treeStr(process.cwd(), depth) || "(vide)");
+          return;
+        }
+        case "recent": {
+          const n = Math.max(1, Math.min(20, parseInt(arg, 10) || 10));
+          const all = [];
+          const walk = (d, depth) => {
+            if (depth > 4 || all.length > 500) return;
+            let entries = [];
+            try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+            for (const e of entries) {
+              if (e.name === "node_modules" || e.name === ".git") continue;
+              const full = path.join(d, e.name);
+              try {
+                const st = fs.statSync(full);
+                if (st.isDirectory()) walk(full, depth + 1);
+                else if (st.isFile()) all.push({ p: path.relative(process.cwd(), full), m: st.mtimeMs });
+              } catch { /* ignore */ }
+            }
+          };
+          walk(process.cwd(), 0);
+          all.sort((a, b) => b.m - a.m);
+          screen.tool("recent", true, null, all.slice(0, n).map((f) => `${new Date(f.m).toLocaleString("fr-FR")}  ${f.p}`).join("\n") || "(vide)");
+          return;
+        }
+        case "zip": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          if (!parts.length) { screen.sys("Usage : /zip <dossier|fichier> [archive.zip]"); return; }
+          const src = inside(parts[0]);
+          const dest = parts[1] ? path.resolve(process.cwd(), parts[1]) : src + ".zip";
+          screen.busy = true; screen.render();
+          try {
+            if (process.platform === "win32") execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${src.replace(/'/g, "''")}' -DestinationPath '${dest.replace(/'/g, "''")}' -Force"`, { timeout: 60000 });
+            else execSync(`zip -qr "${dest.replace(/"/g, '\\"')}" "${src.replace(/"/g, '\\"')}"`, { timeout: 60000 });
+            screen.sys("Archivé : " + dest);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "unzip": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          if (!parts.length) { screen.sys("Usage : /unzip <archive> [dossier]"); return; }
+          const src = inside(parts[0]);
+          const dest = parts[1] ? path.resolve(process.cwd(), parts[1]) : process.cwd();
+          try {
+            if (process.platform === "win32") execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${src.replace(/'/g, "''")}' -DestinationPath '${dest.replace(/'/g, "''")}' -Force"`, { timeout: 60000 });
+            else execSync(`unzip -oq "${src.replace(/"/g, '\\"')}" -d "${dest.replace(/"/g, '\\"')}"`, { timeout: 60000 });
+            screen.sys("Extrait vers : " + dest);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "serve": {
+          if (screen.serve) { screen.sys(`Déjà en ligne : http://127.0.0.1:${screen.servePort}/ (/unserve)`); return; }
+          const parts = arg.split(/\s+/).filter(Boolean);
+          const port = Math.max(1024, Math.min(9999, parseInt(parts[0], 10) || 8080));
+          const root = parts[1] ? inside(parts[1]) : process.cwd();
+          const http = require("http");
+          const srv = http.createServer((req, res) => {
+            try {
+              const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+              const fp = path.resolve(root, "." + urlPath);
+              if (!fp.startsWith(root)) { res.writeHead(403); res.end("?"); return; }
+              const st = fs.statSync(fp);
+              if (st.isDirectory()) {
+                const items = fs.readdirSync(fp).map((e) => `<li><a href="${path.posix.join(urlPath, e)}">${escapeHtml(e)}</a></li>`).join("");
+                res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+                res.end(`<ul>${items}</ul>`);
+                return;
+              }
+              res.writeHead(200, { "Content-Type": MIME[path.extname(fp).toLowerCase()] || "application/octet-stream" });
+              fs.createReadStream(fp).pipe(res);
+            } catch { try { res.writeHead(404); res.end("?"); } catch { /* ignore */ } }
+          });
+          srv.listen(port, "127.0.0.1", () => {
+            screen.serve = srv; screen.servePort = port;
+            screen.sys(`Servi : http://127.0.0.1:${port}/ ← ${root} (/unserve pour couper)`);
+            screen.render();
+          });
+          srv.on("error", (e) => screen.sys("Serveur impossible : " + e.message));
+          return;
+        }
+        case "unserve": {
+          if (!screen.serve) { screen.sys("Aucun serveur."); return; }
+          try { screen.serve.close(); } catch { /* ignore */ }
+          screen.serve = null;
+          screen.sys("Serveur coupé.");
+          screen.render();
+          return;
+        }
+        case "explain": {
+          let code = "", label = "";
+          if (arg) {
+            try { code = fs.readFileSync(inside(arg), "utf8").slice(0, 6000); label = arg; }
+            catch (e) { screen.sys("Lecture impossible : " + e.message); return; }
+          } else {
+            const blk = findCodeBlock(screen);
+            if (!blk) { screen.sys("Usage : /explain <fichier> (ou après un bloc de code)"); return; }
+            code = blk.code; label = "dernier bloc " + (blk.lang || "");
+          }
+          screen.busy = true; screen.render();
+          try {
+            screen.sys("Explication de " + label + "...");
+            await askModel(screen, state, `Explique ce code simplement, partie par partie (rôle, points clés, pièges) :\n\`\`\`\n${code.slice(0, 5000)}\n\`\`\``, state.model);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "test": {
+          let cmd = "";
+          if (fs.existsSync("package.json")) cmd = "npm test";
+          else if (fs.existsSync("pytest.ini") || fs.existsSync("tests") || fs.existsSync("requirements.txt")) cmd = "python -m pytest -q";
+          else if (fs.existsSync("Cargo.toml")) cmd = "cargo test";
+          else if (fs.existsSync("go.mod")) cmd = "go test ./...";
+          if (!cmd) { screen.sys("Aucun runner détecté (npm/pytest/cargo/go)."); return; }
+          screen.sys("$ " + cmd);
+          if (!(await screen.confirm("Exécuter les tests ?"))) { screen.sys("Annulé."); return; }
+          const t0 = Date.now();
+          const res = await shellOut(cmd, 120000);
+          screen.tool("test", true, (Date.now() - t0) / 1000, res);
+          return;
+        }
+        case "git": {
+          try {
+            const br = gitBranch() || "?";
+            const st = execSync("git status --short", { cwd: process.cwd(), timeout: 5000 }).toString().slice(0, 2000);
+            screen.tool("git " + br, true, null, st.trim() || "(propre)");
+          } catch (e) { screen.tool("git", false, null, "pas un dépôt git ?"); }
+          return;
+        }
+        case "commit": {
+          let diff = "";
+          try { diff = execSync("git diff --cached", { cwd: process.cwd(), timeout: 5000, maxBuffer: 1024 * 200 }).toString().slice(0, 4000); } catch { /* ignore */ }
+          if (!diff.trim()) {
+            try { diff = execSync("git diff", { cwd: process.cwd(), timeout: 5000, maxBuffer: 1024 * 200 }).toString().slice(0, 4000); } catch { /* ignore */ }
+          }
+          if (!diff.trim()) { screen.sys("Rien à commiter."); return; }
+          screen.busy = true; screen.render();
+          try {
+            await askModel(screen, state, "Propose UN message de commit conventionnel en français (<72 caractères) pour ce diff. Réponds QUE le message, sans guillemets :\n```\n" + diff + "\n```", state.model);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "history": {
+          if (!screen.hist.length) { screen.sys("Historique vide."); return; }
+          const from = Math.max(0, screen.hist.length - 15);
+          screen.hist.slice(from).forEach((h, i) => screen.sys(`  ${from + i + 1}. ${String(h).slice(0, 70)}`));
+          return;
+        }
+        case "share": {
+          screen.busy = true; screen.render();
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 15000);
+            const r = await fetch("https://paste.rs", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "text/markdown", "User-Agent": "auracode" }, body: exportTxt(screen.messages).slice(0, 100000) });
+            clearTimeout(t);
+            const url = (await r.text()).trim();
+            if (!r.ok || !url.startsWith("http")) throw new Error("partage impossible");
+            screen.sys("Partagé : " + url);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "uptime": {
+          const s = Math.floor(process.uptime());
+          const hh = String(Math.floor(s / 3600)).padStart(2, "0");
+          const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+          const ss = String(s % 60).padStart(2, "0");
+          screen.sys(`v${PKG.version} • Node ${process.version} • session ${hh}:${mm}:${ss} • ${screen.messages.length} blocs`);
+          return;
+        }
+        case "prompt": {
+          screen.sys("Protocole envoyé au modèle :");
+          SYSTEM.split("\n").forEach((l) => screen.sys(l.trim() ? l : " "));
+          return;
+        }
+        case "fix": {
+          screen.sys("Diagnostic + réparation...");
+          if (!state.key) { screen.sys("• pas de clé : lance `auracode login` dans un terminal."); }
+          else {
+            try {
+              if (!getSessionId()) { await newSession(state.key, state.model); screen.sys("• session créée ✓"); }
+              else screen.sys("• session OK");
+            } catch (e) { screen.sys("• session : " + e.message); }
+          }
+          try {
+            const v = await checkUpdate();
+            if (v) { screen.updateAvailable = v; screen.sys(`• mise à jour dispo : ${v} (/update)`); }
+            else screen.sys("• à jour ✓");
+          } catch { /* ignore */ }
+          screen.render();
+          return;
+        }
+        case "date": {
+          const d = new Date();
+          screen.sys(d.toLocaleString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) + `  •  ${d.getTime()}`);
+          return;
+        }
+        case "uuid": {
+          screen.sys(crypto.randomUUID());
+          return;
+        }
+        case "pass": {
+          const n = Math.max(8, Math.min(64, parseInt(arg, 10) || 20));
+          const s = crypto.randomBytes(48).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "").slice(0, n);
+          screen.sys(`Mot de passe (${n}) : ${s}`);
+          return;
+        }
+        case "encode":
+        case "decode": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          const how = (parts[0] || "").toLowerCase();
+          const text = parts.slice(1).join(" ");
+          if (!["b64", "base64", "url", "hex"].includes(how) || !text) { screen.sys("Usage : /encode <b64|url|hex> <texte>  (idem /decode)"); return; }
+          try {
+            let out;
+            const isEnc = cmd === "encode";
+            if (how.startsWith("b")) out = isEnc ? Buffer.from(text, "utf8").toString("base64") : Buffer.from(text, "base64").toString("utf8");
+            else if (how === "url") out = isEnc ? encodeURIComponent(text) : decodeURIComponent(text);
+            else out = isEnc ? Buffer.from(text, "utf8").toString("hex") : Buffer.from(text, "hex").toString("utf8");
+            screen.tool(cmd, true, null, out);
+          } catch (e) { screen.tool(cmd, false, null, "Conversion impossible."); }
+          return;
+        }
+        case "json": {
+          if (!arg) { screen.sys("Usage : /json <texte json>"); return; }
+          try { screen.tool("json", true, null, JSON.stringify(JSON.parse(arg), null, 2).slice(0, 3000)); }
+          catch (e) { screen.tool("json", false, null, "JSON invalide."); }
+          return;
+        }
+        case "upper": {
+          if (!arg) { screen.sys("Usage : /upper <texte>"); return; }
+          screen.sys(arg.toUpperCase());
+          return;
+        }
+        case "lower": {
+          if (!arg) { screen.sys("Usage : /lower <texte>"); return; }
+          screen.sys(arg.toLowerCase());
+          return;
+        }
+        case "len": {
+          if (!arg) { screen.sys("Usage : /len <texte>"); return; }
+          const words = (arg.match(/\S+/g) || []).length;
+          screen.sys(`${arg.length} caractères • ${words} mots`);
+          return;
+        }
+        case "slug": {
+          if (!arg) { screen.sys("Usage : /slug <texte>"); return; }
+          screen.sys(slugify(arg));
+          return;
+        }
+        case "sort": {
+          if (!arg) { screen.sys("Usage : /sort <a,b,c>"); return; }
+          screen.sys(arg.split(",").map((x) => x.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, "fr")).join(", "));
+          return;
+        }
+        case "shuffle": {
+          if (!arg) { screen.sys("Usage : /shuffle <a,b,c>"); return; }
+          const a = arg.split(",").map((x) => x.trim()).filter(Boolean);
+          for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
+          screen.sys(a.join(", "));
+          return;
+        }
+        case "cal": {
+          const now = new Date();
+          screen.tool("calendrier", true, null, calMonth(now.getFullYear(), now.getMonth() + 1));
+          return;
+        }
+        case "chrono": {
+          const sub = (arg || "").toLowerCase();
+          const fmtEl = (ms) => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
+          if (sub === "stop") {
+            if (!screen.chronoT) { screen.sys("Aucun chrono."); return; }
+            screen.sys("Chrono : " + fmtEl(Date.now() - screen.chronoT));
+            screen.chronoT = null;
+            return;
+          }
+          if (!screen.chronoT) { screen.chronoT = Date.now(); screen.sys("Chrono lancé (/chrono = temps, /chrono stop = fin)."); return; }
+          screen.sys("Chrono : " + fmtEl(Date.now() - screen.chronoT));
+          return;
+        }
+        case "table": {
+          if (!arg) { screen.sys("Usage : /table <a,b;c,d>"); return; }
+          try { screen.tool("table", true, null, mdTable(arg)); }
+          catch (e) { screen.tool("table", false, null, e.message); }
+          return;
+        }
+        case "tva": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          const prix = parseFloat((parts[0] || "").replace(",", "."));
+          const taux = parseFloat((parts[1] || "20").replace(",", ".")) || 20;
+          if (!(prix > 0)) { screen.sys("Usage : /tva <prix HT> [taux=20]"); return; }
+          const tva = prix * taux / 100;
+          screen.sys(`${prix} € HT + ${taux}% = ${(prix + tva).toFixed(2)} € TTC (TVA ${tva.toFixed(2)} €)`);
+          return;
+        }
+        case "8ball": {
+          const reps = ["Oui, certainement.", "C'est certain.", "Sans aucun doute.", "Très probable.", "Oui.", "Signes favorables.", "Mieux vaut ne pas te le dire maintenant.", "Redemande plus tard.", "N'y compte pas.", "Non.", "Très douteux.", "Fonce !", "Réfléchis encore.", "Absolument pas.", "Les étoiles disent oui.", "Probablement.", "Ça sent bon.", "Évite.", "Gros oui.", "Non, et c'est non."];
+          screen.sys(`🎱 ${reps[Math.floor(Math.random() * reps.length)]}`);
+          return;
+        }
+        case "lorem": {
+          const n = Math.max(1, Math.min(200, parseInt(arg, 10) || 30));
+          const base = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis".split(" ");
+          const out = [];
+          for (let i = 0; i < n; i++) out.push(base[i % base.length]);
+          screen.sys(out.join(" ") + ".");
+          return;
+        }
+        case "rainbow": {
+          if (!arg) { screen.sys("Usage : /rainbow <texte>"); return; }
+          const cols = [P.pink, P.peach, P.butter, P.mint, P.aqua, P.sky, P.lavender, P.lilac, P.coral, P.lemon];
+          let s = "";
+          [...arg.slice(0, 200)].forEach((ch, i) => { s += cols[i % cols.length] + ch; });
+          screen.tool("rainbow", true, null, s + P.reset);
+          return;
+        }
+        case "cowsay": {
+          screen.tool("vache", true, null, cowSay(arg || "meuh"));
+          return;
+        }
+        case "bg": {
+          if (!arg) { screen.sys("Usage : /bg <commande>"); return; }
+          const id = (screen.jobSeq = (screen.jobSeq || 0) + 1);
+          const file = path.join(os.tmpdir(), `aura-job-${process.pid}-${id}.log`);
+          try { fs.writeFileSync(file, `$ ${arg}\n[démarré]\n`); } catch { /* ignore */ }
+          const proc = exec(arg, { cwd: process.cwd(), timeout: 30 * 60000, maxBuffer: 1024 * 1024 }, (err) => {
+            try { fs.appendFileSync(file, `\n[terminé code=${err ? err.code || 1 : 0}]\n`); } catch { /* ignore */ }
+            try { screen.render(); } catch { /* ignore */ }
+          });
+          if (proc && proc.unref) proc.unref();
+          screen.jobs = screen.jobs || [];
+          screen.jobs.push({ id, cmd: arg, file, start: Date.now(), proc });
+          if (screen.jobs.length > 10) screen.jobs.shift();
+          screen.sys(`Tâche #${id} lancée en fond (/jobs, /fg ${id}).`);
+          return;
+        }
+        case "jobs": {
+          const list = screen.jobs || [];
+          if (!list.length) { screen.sys("Aucune tâche. /bg <commande> pour lancer."); return; }
+          list.forEach((j) => {
+            const done = !j.proc || j.proc.exitCode !== null;
+            const el = Math.round((Date.now() - j.start) / 1000);
+            screen.sys(`  #${j.id} ${done ? `fini (${j.proc ? j.proc.exitCode : "?"})` : `en cours ${el}s`} — ${j.cmd}`);
+          });
+          return;
+        }
+        case "fg": {
+          const id = parseInt(arg, 10);
+          const j = (screen.jobs || []).find((x) => x.id === id);
+          if (!j) { screen.sys("Usage : /fg <id> (voir /jobs)"); return; }
+          try {
+            const out = fs.readFileSync(j.file, "utf8").slice(-3000);
+            screen.tool("job #" + id, true, null, out);
+          } catch (e) { screen.tool("job", false, null, e.message); }
+          return;
+        }
+        case "plan": {
+          if (!arg) { screen.sys("Usage : /plan <tâche>"); return; }
+          screen.busy = true; screen.render();
+          try {
+            let sid = getSessionId();
+            if (!sid) sid = await newSession(state.key, state.model);
+            const d = await api("/api/chat", {
+              message: `Propose un plan numéroté (max 6 étapes, chacune faisable avec : lire/écrire/exécuter/chercher des fichiers) pour : ${arg}. Réponds UNIQUEMENT avec les étapes numérotées, une par ligne.`,
+              session_id: sid, model: state.model, effort: "low",
+            }, state.key);
+            const steps = String(d.reply || "").split("\n").map((l) => l.replace(/^\s*\d+[.)]\s*/, "").trim()).filter((l) => l.length > 3).slice(0, 6);
+            if (!steps.length) throw new Error("plan vide");
+            screen.plan = { task: arg, steps, idx: 0 };
+            screen.sys(`Plan (${steps.length} étapes) — /go une par une, /goall tout :`);
+            steps.forEach((s, i) => screen.sys(`  ${i + 1}. ${s}`));
+            await screen.refreshQuota();
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "go":
+        case "goall": {
+          const p = screen.plan;
+          if (!p || p.idx >= p.steps.length) { screen.sys("Pas de plan en cours (/plan <tâche>)."); return; }
+          const all = cmd === "goall";
+          do {
+            const step = p.steps[p.idx++];
+            screen.sys(`▶ Étape ${p.idx}/${p.steps.length} : ${step}`);
+            await screen.onLine(step);
+            if (screen.cancelled) { screen.sys("Plan interrompu."); break; }
+          } while (all && p.idx < p.steps.length);
+          if (p.idx >= p.steps.length) { screen.sys("Plan terminé ✓"); screen.plan = null; }
+          return;
+        }
+        case "macro": {
+          const parts = arg.split(/\s+/).filter(Boolean);
+          const sub = (parts[0] || "list").toLowerCase();
+          const arr = loadList(MACROS_FILE);
+          if (sub === "add") {
+            const name = parts[1] || "";
+            const text = parts.slice(2).join(" ");
+            if (!/^[a-z0-9_-]{1,20}$/i.test(name) || !text) { screen.sys("Usage : /macro add <nom> <texte>"); return; }
+            const i = arr.findIndex((x) => x.name === name);
+            if (i >= 0) arr[i].text = text; else arr.push({ name, text });
+            saveList(MACROS_FILE, arr);
+            screen.sys(`Macro !${name} ${i >= 0 ? "mise à jour" : "créée"}.`);
+            return;
+          }
+          if (sub === "del") {
+            const name = parts[1] || "";
+            const n0 = arr.length;
+            saveList(MACROS_FILE, arr.filter((x) => x.name !== name));
+            screen.sys(n0 === arr.length ? "Introuvable." : "Supprimée.");
+            return;
+          }
+          if (!arr.length) { screen.sys("Aucune macro. /macro add <nom> <texte> puis tape !<nom>"); return; }
+          screen.sys("Macros (tape !nom) :");
+          arr.forEach((x) => screen.sys(`  !${x.name} → ${String(x.text).slice(0, 60)}`));
+          return;
+        }
+        case "conv": {
+          let list = [];
+          try {
+            const d = await api("/api/sessions", null, state.key, "GET");
+            list = (d.sessions || []).slice(-12);
+          } catch (e) { screen.sys("Erreur : " + e.message); return; }
+          if (!list.length) { screen.sys("Aucune conversation. /new pour commencer."); return; }
+          screen.openModal("Conversations (serveur)", [
+            { label: "＋ Nouvelle conversation", value: "__new" },
+            ...list.map((s) => ({ label: `${String(s.session_id).slice(0, 8)} • ${s.model || "?"} • ${s.messages_used || 0} msgs — ${(s.title || "").slice(0, 30)}`, value: s.session_id })),
+          ], async (v) => {
+            if (!v) { screen.render(); return; }
+            try {
+              if (v === "__new") {
+                const id = await newSession(state.key, state.model);
+                screen.sys("Nouvelle conversation : " + String(id).slice(0, 8));
+              } else {
+                setSessionId(v);
+                const found = list.find((s) => s.session_id === v);
+                if (found && found.model) state.model = found.model;
+                screen.sys("Conversation : " + String(v).slice(0, 8));
+              }
+              await screen.refreshQuota();
+              screen.render();
+            } catch (e) { screen.sys("Erreur : " + e.message); }
+          });
+          return;
+        }
+        case "review": {
+          let code = "", label = "";
+          if (arg) {
+            try { code = fs.readFileSync(inside(arg), "utf8").slice(0, 6000); label = arg; }
+            catch (e) { screen.sys("Lecture impossible : " + e.message); return; }
+          } else {
+            const blk = findCodeBlock(screen);
+            if (!blk) { screen.sys("Usage : /review <fichier> (ou après un bloc de code)"); return; }
+            code = blk.code; label = "dernier bloc " + (blk.lang || "");
+          }
+          screen.busy = true; screen.render();
+          try {
+            screen.sys("Relecture de " + label + "...");
+            await askModel(screen, state, `Relis ce code (bugs, sécurité, perf). Donne une note /10 puis max 5 remarques concrètes :\n\`\`\`\n${code.slice(0, 5000)}\n\`\`\``, state.model);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "persona": {
+          const cfg = loadJson(CONFIG_FILE, {});
+          if (!arg) {
+            screen.sys(cfg.persona ? "Persona : " + cfg.persona : "Pas de persona. /persona <texte> pour en définir une, /persona off pour effacer.");
+            return;
+          }
+          if (arg.toLowerCase() === "off") { delete cfg.persona; saveJson(CONFIG_FILE, cfg); screen.sys("Persona effacée."); return; }
+          cfg.persona = arg.slice(0, 2000); saveJson(CONFIG_FILE, cfg);
+          screen.sys("Persona enregistrée (appliquée à chaque demande).");
+          return;
+        }
+        case "compare": {
+          if (!arg) { screen.sys("Usage : /compare <question>"); return; }
+          screen.busy = true; screen.render();
+          try {
+            let sid = getSessionId();
+            if (!sid) sid = await newSession(state.key, state.model);
+            screen.sys("J'interroge aura-1.1 et aura-1.2...");
+            const [a, b] = await Promise.all([
+              api("/api/chat", { message: arg, session_id: sid, model: "aura-1.1", effort: "middle" }, state.key),
+              api("/api/chat", { message: arg, session_id: sid, model: "aura-1.2", effort: "middle" }, state.key),
+            ]);
+            screen.sys("— aura-1.1 :");
+            screen.assistant(String(a.reply || "").trim());
+            screen.sys("— aura-1.2 :");
+            screen.assistant(String(b.reply || "").trim());
+            await screen.refreshQuota();
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
           return;
         }
         default:
