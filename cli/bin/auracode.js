@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.1.1" };
+const PKG = { version: "1.1.2" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -239,7 +239,20 @@ async function splash() {
   return latest;
 }
 
+// Comparaison semver : >0 si a plus récent, <0 si plus vieux, 0 si égaux.
+// (Évite les faux "update dispo" quand le code local est en avance sur main.)
+const cmpVer = (a, b) => {
+  const norm = (v) => String(v || "").trim().replace(/^v/i, "").split(".").map((x) => parseInt(x, 10) || 0);
+  const pa = norm(a), pb = norm(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length, 3); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+};
+
 async function checkUpdate() {
+  // Retourne la version distante SEULEMENT si strictement plus récente (semver),
+  // null si à jour ou en avance (dev), undefined si vérification impossible.
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 4000);
@@ -250,7 +263,7 @@ async function checkUpdate() {
     clearTimeout(t);
     if (!r.ok) return undefined;
     const latest = (await r.json()).version;
-    if (latest && latest !== PKG.version) {
+    if (latest && cmpVer(latest, PKG.version) > 0) {
       return latest;
     }
     return null;
@@ -262,14 +275,6 @@ async function selfUpdate(quiet = false) {
   const lines = [];
   const say = (t) => { lines.push(t); if (!quiet) console.log(t); };
   const done = () => lines.join("\n");
-  const cmpVer = (a, b) => {
-    const pa = String(a || "").split(".").map((x) => parseInt(x, 10) || 0);
-    const pb = String(b || "").split(".").map((x) => parseInt(x, 10) || 0);
-    for (let i = 0; i < 3; i++) {
-      if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
-    }
-    return 0;
-  };
   const isExe = process.platform === "win32" && /auracode\.exe$/i.test(process.execPath);
   if (isExe) {
     say("Recherche de mise à jour...");
@@ -1031,7 +1036,7 @@ const slugify = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").
 
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
-  { name: "/new", desc: "Nouvelle conversation" },
+  { name: "/new", desc: "Nouvelle conv" },
   { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
