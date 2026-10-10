@@ -13,17 +13,17 @@ const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.4.0" };
+const PKG = { version: "0.4.1" };
 
-const ART = `
- █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗
-██╔══██╗██║   ██║██╔══██╗██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝
-███████║██║   ██║██████╔╝███████║██║     ██║   ██║██║  ██║█████╗
-██╔══██║██║   ██║██╔══██╗██╔══██║██║     ██║   ██║██║  ██║██╔══╝
-██║  ██║╚██████╔╝██║  ██║██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗
-╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝╚═════╝ ╚══════╝
-  L'IA qui pilote ton PC — propulsée par le cloud VTH
-`;
+const ART_LINES = [
+  " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
+  "██╔══██╗██║   ██║██╔══██╗██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+  "███████║██║   ██║██████╔╝███████║██║     ██║   ██║██║  ██║█████╗",
+  "██╔══██║██║   ██║██╔══██╗██╔══██║██║     ██║   ██║██║  ██║██╔══╝",
+  "██║  ██║╚██████╔╝██║  ██║██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗",
+  "╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝╚═════╝ ╚══════╝",
+];
+const ART_COLORS = ["pink", "peach", "lemon", "mint", "sky", "lavender", "pink"];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -61,15 +61,25 @@ function saveJson(p, obj) {
 const getKey = () => (loadJson(CONFIG_FILE, {}).apiKey || "").trim();
 
 async function intro() {
-  console.log(ART);
+  const W = process.stdout.columns || 80;
+  const show = (text, color) => {
+    const pad = " ".repeat(Math.max(0, Math.floor((W - text.length) / 2)));
+    console.log(pad + (color ? P[color] + text + P.reset : text));
+  };
+  console.log("");
+  ART_LINES.forEach((ln, i) => show(ln, ART_COLORS[i % ART_COLORS.length]));
+  show("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky");
+  console.log("");
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   const start = Date.now();
   let i = 0;
   while (Date.now() - start < 2000) {
-    process.stdout.write("\rConnexion au cloud VTH " + frames[i++ % frames.length] + " ");
+    const label = `Connexion au cloud VTH ${frames[i++ % frames.length]} `;
+    process.stdout.write("\r" + " ".repeat(Math.max(0, Math.floor((W - label.length) / 2))) + pastel("lavender", label));
     await sleep(80);
   }
-  process.stdout.write("\rConnecté au cloud VTH ✓                    \n");
+  const ok = "Connecté au cloud VTH ✓";
+  process.stdout.write("\r" + " ".repeat(Math.max(0, Math.floor((W - ok.length) / 2))) + pastel("mint", ok) + "                    \n");
 }
 
 async function checkUpdate() {
@@ -226,6 +236,27 @@ const TOOLS = {
       return out.join("\n") || "Aucun résultat.";
     },
   },
+  open_file: {
+    desc: "Ouvre un fichier/dossier avec le programme par défaut (demande confirmation). Args: {path}",
+    run: async ({ path: p }, ui) => {
+      const abs = inside(p);
+      const plat = process.platform;
+      const cmd = plat === "win32" ? `start "" "${abs}"` : plat === "darwin" ? `open "${abs}"` : `xdg-open "${abs}"`;
+      if (!(await ui.confirm(`Ouvrir ${p} ?`))) return "Annulé par l'utilisateur.";
+      await new Promise((resolve, reject) =>
+        exec(cmd, { timeout: 15000 }, (e) => (e ? reject(e) : resolve(null))));
+      return "Ouvert : " + p;
+    },
+  },
+  sysinfo: {
+    desc: "Infos système (OS, CPU, RAM). Args: {}",
+    run: async () => {
+      const o = require("os");
+      const total = Math.round(o.totalmem() / 1073741824) + " Go";
+      const free = Math.round(o.freemem() / 1073741824) + " Go";
+      return `OS: ${o.platform()} ${o.release()} (${o.arch()})\nCPU: ${o.cpus()[0].model} x${o.cpus().length}\nRAM: ${free} libres / ${total}\nDossier: ${process.cwd()}`;
+    },
+  },
 };
 
 const SYSTEM = `Tu es AuraCode, un agent qui pilote le PC de l'utilisateur via des outils. Réponds en français, concis.
@@ -237,6 +268,8 @@ Outils disponibles :
 - write_file {"path", "content"} : écrire un fichier
 - exec {"cmd"} : commande shell
 - search {"pattern", "path"?} : chercher du texte
+- open_file {"path"} : ouvrir un fichier/dossier avec le programme par défaut
+- sysinfo {} : infos du PC (OS, CPU, RAM)
 Règles : une seule action par réponse. Quand tu as fini, réponds normalement SANS bloc outil. Ne refuse jamais d'agir.`;
 
 function extractTool(text) {

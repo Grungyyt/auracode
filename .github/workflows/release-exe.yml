@@ -14,6 +14,10 @@ jobs:
         with:
           node-version: 20
       - run: node scripts/build-exe.js
+      - name: Vérifie le .exe (refuse un binaire non fusionné)
+        run: |
+          $o = & .\cli\dist\auracode.exe --help
+          if ($o -notmatch "AuraCode") { throw "exe invalide : blob non fusionné" }
       - run: gh release create "${{ github.ref_name }}" cli/dist/auracode.exe --title "${{ github.ref_name }}" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
