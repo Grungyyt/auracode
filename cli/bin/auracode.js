@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.10" };
+const PKG = { version: "0.8.11" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -88,7 +88,7 @@ const ART_LINES = [
   "██║  ██║╚██████╔╝██║  ██║██║  ██║╚██████╗╚██████╔╝██████╔╝███████╗",
   "╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝╚═════╝ ╚══════╝",
 ];
-const ART_COLORS = ["pink", "peach", "lemon", "mint", "sky", "lavender", "pink"];
+const ART_COLORS = ["pink", "peach", "butter", "mint", "aqua", "sky", "lavender", "lilac", "coral", "pink"];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -102,6 +102,10 @@ const P = {
   sky: "\x1b[38;2;160;210;250m",
   lemon: "\x1b[38;2;255;240;170m",
   dim: "\x1b[38;2;170;170;180m",
+  lilac: "\x1b[38;2;216;180;254m",
+  aqua: "\x1b[38;2;165;243;252m",
+  butter: "\x1b[38;2;253;230;138m",
+  coral: "\x1b[38;2;253;164;175m",
   bold: "\x1b[1m",
 };
 const pastel = (color, s) => P[color] + s + P.reset;
@@ -117,10 +121,10 @@ function pastelBox(title, lines) {
 
 // Thèmes de couleur (pastel par défaut, modifiables avec /theme).
 const THEMES = {
-  pastel: { pink: "\x1b[38;2;255;179;199m", mint: "\x1b[38;2;150;230;190m", lavender: "\x1b[38;2;190;190;235m", peach: "\x1b[38;2;255;200;150m", sky: "\x1b[38;2;160;210;250m", lemon: "\x1b[38;2;255;240;170m", dim: "\x1b[38;2;170;170;180m" },
-  sunset: { pink: "\x1b[38;2;255;107;107m", mint: "\x1b[38;2;255;209;102m", lavender: "\x1b[38;2;244;162;97m", peach: "\x1b[38;2;231;111;81m", sky: "\x1b[38;2;233;196;106m", lemon: "\x1b[38;2;244;162;97m", dim: "\x1b[38;2;150;150;150m" },
-  ocean: { pink: "\x1b[38;2;72;202;228m", mint: "\x1b[38;2;144;224;239m", lavender: "\x1b[38;2;119;141;169m", peach: "\x1b[38;2;100;223;223m", sky: "\x1b[38;2;0;187;249m", lemon: "\x1b[38;2;128;255;219m", dim: "\x1b[38;2;140;140;140m" },
-  mono: { pink: "\x1b[37m", mint: "\x1b[37m", lavender: "\x1b[37m", peach: "\x1b[37m", sky: "\x1b[37m", lemon: "\x1b[37m", dim: "\x1b[90m" },
+  pastel: { pink: "\x1b[38;2;255;179;199m", mint: "\x1b[38;2;150;230;190m", lavender: "\x1b[38;2;190;190;235m", peach: "\x1b[38;2;255;200;150m", sky: "\x1b[38;2;160;210;250m", lemon: "\x1b[38;2;255;240;170m", dim: "\x1b[38;2;170;170;180m", lilac: "\x1b[38;2;216;180;254m", aqua: "\x1b[38;2;165;243;252m", butter: "\x1b[38;2;253;230;138m", coral: "\x1b[38;2;253;164;175m" },
+  sunset: { pink: "\x1b[38;2;255;107;107m", mint: "\x1b[38;2;255;209;102m", lavender: "\x1b[38;2;244;162;97m", peach: "\x1b[38;2;231;111;81m", sky: "\x1b[38;2;233;196;106m", lemon: "\x1b[38;2;244;162;97m", dim: "\x1b[38;2;150;150;150m", lilac: "\x1b[38;2;255;158;181m", aqua: "\x1b[38;2;255;200;130m", butter: "\x1b[38;2;255;220;130m", coral: "\x1b[38;2;255;120;110m" },
+  ocean: { pink: "\x1b[38;2;72;202;228m", mint: "\x1b[38;2;144;224;239m", lavender: "\x1b[38;2;119;141;169m", peach: "\x1b[38;2;100;223;223m", sky: "\x1b[38;2;0;187;249m", lemon: "\x1b[38;2;128;255;219m", dim: "\x1b[38;2;140;140;140m", lilac: "\x1b[38;2;180;160;255m", aqua: "\x1b[38;2;120;240;255m", butter: "\x1b[38;2;190;255;220m", coral: "\x1b[38;2;120;220;230m" },
+  mono: { pink: "\x1b[37m", mint: "\x1b[37m", lavender: "\x1b[37m", peach: "\x1b[37m", sky: "\x1b[37m", lemon: "\x1b[37m", dim: "\x1b[90m", lilac: "\x1b[37m", aqua: "\x1b[37m", butter: "\x1b[37m", coral: "\x1b[37m" },
 };
 
 function loadJson(p, fallback) {
@@ -164,6 +168,12 @@ function uninstallCmds(dir, wipeData) {
   return cmds.join("; ");
 }
 
+function brandLine(W) {
+  const plain = "Aura by VTH Group";
+  const pad = " ".repeat(Math.max(0, Math.floor((W - plain.length) / 2)));
+  return pad + P.bold + P.pink + "Aura" + P.reset + P.dim + " by " + P.reset + P.bold + P.sky + "VTH Group" + P.reset;
+}
+
 async function splash() {
   // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
   // Retourne : version dispo (string), null (à jour), undefined (hors ligne).
@@ -184,6 +194,7 @@ async function splash() {
     center(`v${PKG.version}`, "dim"),
     "",
   ];
+  block.splice(block.length - 1, 0, brandLine(W));
   const topPad = Math.max(0, Math.floor((H - block.length - 1) / 2));
   const statusRow = topPad + block.length + 1;
   process.stdout.write("\x1b[?25l\x1b[2J\x1b[H");
@@ -963,7 +974,13 @@ class Screen {
     ];
     while (rows.length < h - 1) rows.push("");
     rows.push("F3 fermer");
-    return { sbW, rows: rows.map((r) => r.slice(0, sbW)) };
+    const base = rows.map((r) => r.slice(0, sbW));
+    const tinted = base.map((r, i) => {
+      if (i === 0) return P.lavender + r + P.reset;
+      if (i === 1 || i === base.length - 1) return P.dim + r + P.reset;
+      return P.butter + r + P.reset;
+    });
+    return { sbW, rows: tinted.slice(0, h) };
   }
 
   async switchSession(i) {
@@ -991,7 +1008,13 @@ class Screen {
     }
     while (rows.length < h - 1) rows.push("");
     rows.push("Alt+n • F2 fermer".slice(0, sbW));
-    return { sbW, rows: rows.slice(0, h) };
+    const tinted = rows.map((r, i) => {
+      if (i === 0) return P.lavender + r + P.reset;
+      if (i === rows.length - 1) return P.dim + r + P.reset;
+      if (r.includes("●")) return P.mint + r + P.reset;
+      return P.butter + r + P.reset;
+    });
+    return { sbW, rows: tinted.slice(0, h) };
   }
 
   inputRows(fieldW) {
@@ -1068,7 +1091,7 @@ class Screen {
       if (m.role === "tool") {
         const icol = m.ok ? P.mint : P.pink;
         const icon = m.ok ? "✓" : "✗";
-        push("", ` ${icol}⚙ ${m.name} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""}${P.reset}`);
+        push("", ` ${icol}⚙ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""}${P.reset}`);
         const outs = String(m.output || "").split("\n").slice(0, 6);
         for (const ol of outs) {
           const t = ol.slice(0, Math.max(20, W - 10));
@@ -1090,7 +1113,7 @@ class Screen {
       const top = "╭" + "─".repeat(bw + 2) + "╮";
       const bot = "╰" + "─".repeat(bw + 2) + "╯";
       const headPlain = `${mine ? "Toi" : "Aura"} • ${m.time || ""}`;
-      const headOut = nameColor + P.bold + headPlain + P.reset;
+      const headOut = nameColor + P.bold + (mine ? "Toi" : "Aura") + P.reset + P.dim + ` • ${m.time || ""}` + P.reset;
       const rowsV = [headPlain, top, ...wrapped.map((wl) => `│ ${padEnd(wl)} │`), bot];
       const fmt = (wl) => (m.role === "assistant" ? mdInline(wl) : wl);
       const rowsO = [headOut, border + top + P.reset, ...wrapped.map((wl) => border + "│ " + P.reset + fmt(padEnd(wl)) + border + " │" + P.reset), border + bot + P.reset];
