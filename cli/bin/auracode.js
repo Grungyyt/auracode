@@ -13,7 +13,7 @@ const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.6.0" };
+const PKG = { version: "0.7.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -99,12 +99,13 @@ async function checkUpdate() {
       headers: { "User-Agent": "auracode" },
     });
     clearTimeout(t);
-    if (!r.ok) return;
+    if (!r.ok) return null;
     const latest = (await r.json()).version;
     if (latest && latest !== PKG.version) {
-      console.log(`\nNouvelle version ${latest} disponible (tu as ${PKG.version}) : lance \`auracode update\`\n`);
+      return latest;
     }
   } catch { /* silencieux */ }
+  return null;
 }
 
 // Mise à jour : mode .exe via releases GitHub, mode script via fichiers du repo.
@@ -481,6 +482,7 @@ const COMMANDS = [
   { name: "/copy", desc: "Copier la dernière réponse" },
   { name: "/export", desc: "Sauver la conversation en markdown" },
   { name: "/theme", desc: "Changer de thème de couleur" },
+  { name: "/update", desc: "Mettre à jour AuraCode" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
@@ -509,8 +511,9 @@ function wrapText(text, width) {
 
 // ---------- Écran plein terminal ----------
 class Screen {
-  constructor(state) {
+  constructor(state, updateAvailable) {
     this.state = state;
+    this.updateAvailable = updateAvailable;
     this.W = 80; this.H = 24;
     this.messages = [];
     this.input = "";
@@ -703,7 +706,9 @@ class Screen {
     }
 
     let sL, sR = "";
-    if (this.busy && this.thinkSec !== null && this.thinkSec !== undefined) {
+    if (this.updateAvailable) {
+      sL = `Mise à jour ${this.updateAvailable} dispo — tape /update`;
+    } else if (this.busy && this.thinkSec !== null && this.thinkSec !== undefined) {
       sL = `Aura réfléchit... ${this.thinkSec.toFixed(0)}s`;
     } else if (this.busy) {
       sL = "Travail en cours...";
@@ -711,6 +716,7 @@ class Screen {
       sL = "/ = commandes • PgUp/PgDn = défiler • Ctrl+C = quitter";
     }
     if (this.scroll > 0) sR = "PgDn : bas";
+    if (this.updateAvailable) sR = "Tape /update";
     let sLine = sL;
     if (sR) sLine += " ".repeat(Math.max(1, W - sL.length - sR.length)) + sR;
     if (sLine.length > W) sLine = sLine.slice(0, W);
@@ -854,12 +860,12 @@ class Screen {
   }
 }
 
-async function runTUI(state) {
+async function runTUI(state, updateAvailable) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.log("Terminal interactif requis pour le mode plein écran.");
     process.exit(1);
   }
-  const screen = new Screen(state);
+  const screen = new Screen(state, updateAvailable);
 
   screen.onLine = async (line) => {
     if (line.startsWith("/")) {
@@ -958,6 +964,12 @@ async function runTUI(state) {
           screen.render();
           return;
         }
+        case "update": {
+          if (!screen.updateAvailable) { screen.sys("Déjà à jour (" + PKG.version + ")."); return; }
+          screen.sys("Lancement de la mise à jour vers " + screen.updateAvailable + "...");
+          await selfUpdate();
+          return;
+        }
         default:
           screen.sys("Commande inconnue, /help pour la liste.");
           return;
@@ -998,7 +1010,7 @@ async function main() {
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Colle ta clé ak-vth-... de /profile/dev\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
-  Plein écran : /new /model /effort /quota /image /copy /export /theme /clear /help (/ = suggestions)\n`);
+  Plein écran : /new /model /effort /quota /image /copy /export /theme /update /clear /help (/ = suggestions)\n`);
     return;
   }
   let model = "aura-1.1-code", effort = "high";
@@ -1064,7 +1076,7 @@ async function main() {
   }
 
   await intro();
-  checkUpdate();
+  const updateAvailable = await checkUpdate();
   let key = getKey();
   if (!key) {
     console.log(pastel("peach", "Aucune configuration détectée — lancement de l'installation.\n"));
@@ -1087,7 +1099,7 @@ async function main() {
       state.theme = savedTheme;
     }
   } catch { /* défaut pastel */ }
-  await runTUI(state);
+  await runTUI(state, updateAvailable);
   return;
 
   /* --- Ancien mode ligne (conservé, inactif) ---
