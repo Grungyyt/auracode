@@ -14,7 +14,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.1" };
+const PKG = { version: "0.8.2" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -317,6 +317,8 @@ Outils disponibles :
 - search {"pattern", "path"?} : chercher du texte
 - open_file {"path"} : ouvrir un fichier/dossier avec le programme par défaut
 - sysinfo {} : infos du PC (OS, CPU, RAM)
+- Accès COMPLET au PC : tous les disques et dossiers, chemins relatifs OU absolus (ex C:/Docs/fichier.txt, D:/projet).
+- Le dossier actuel et l'OS sont rappelés dans chaque demande ([Contexte PC]) : utilise-les pour construire tes chemins.
 Règles : une seule action par réponse. Quand tu as fini, réponds normalement SANS bloc outil. Ne refuse jamais d'agir.`;
 
 function extractTool(text) {
@@ -343,6 +345,7 @@ async function timedCall(fn, onTick) {
 
 async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   let sessionId = getSessionId();
+  prompt = `[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]\n` + prompt;
   const callChat = async (sid, hist) =>
     api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: hist }, key, "POST", ui.signal);
 
@@ -1431,6 +1434,12 @@ async function runTUI(state, updateAvailable) {
           } catch (e) { screen.sys("Modèles : ? (" + e.message + ")"); }
           screen.sys("Clé : " + (state.key ? "présente" : "absente (auracode login)"));
           screen.sys(`Node ${process.version} • ${process.platform} • ${process.cwd()}`);
+          try {
+            const probe = path.join(process.cwd(), ".aura-write-test");
+            fs.writeFileSync(probe, "ok");
+            fs.unlinkSync(probe);
+            screen.sys("Disque : écriture OK ici");
+          } catch (e) { screen.sys("Disque : écriture IMPOSSIBLE (" + e.message + ")"); }
           screen.busy = false; screen.render();
           return;
         }
