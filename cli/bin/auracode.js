@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.0.0" };
+const PKG = { version: "1.1.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -620,6 +620,7 @@ async function cmdSetup() {
   const model = await choose("Étape 2/3 — Choisis ton modèle", [
     { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
     { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
+    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM)" },
     { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
   ]);
   if (!model) { console.log("Annulé."); rl.close(); return; }
@@ -1017,7 +1018,7 @@ const slugify = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conversation" },
-  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.1-code"] },
+  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
   { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono"] },
@@ -1831,7 +1832,7 @@ async function runTUI(state, updateAvailable) {
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.slice(1).split(" ");
       const arg = rest.join(" ").trim();
-      const MODELS = ["aura-1.1", "aura-1.2", "aura-1.1-code"];
+      const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"];
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
       const saveCfg = () => saveJson(CONFIG_FILE, {
@@ -3093,7 +3094,7 @@ async function main() {
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
-  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir)\n`);
     return;
   }
@@ -3221,7 +3222,7 @@ async function main() {
   console.log(`Modèle ${pastel("lemon", model)} • effort ${pastel("lemon", effort)} • dossier ${process.cwd()}`);
   console.log("Écris ta demande (exit pour quitter, /help pour les commandes).\n");
 
-  const MODELS = ["aura-1.1", "aura-1.2", "aura-1.1-code"];
+  const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"];
   const EFFORTS = ["low", "middle", "high", "xhigh"];
   const saveCfg = (patch) => {
     const cfg = loadJson(CONFIG_FILE, {});
@@ -3239,7 +3240,7 @@ async function main() {
       console.log(`
 Commandes :
   /new              Nouvelle conversation
-  /model [X]        Voir/Changer de modèle (aura-1.1, aura-1.2, aura-1.1-code)
+  /model [X]        Voir/Changer de modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)
   /effort [X]       Voir/Changer l'effort (low, middle, high, xhigh)
   /quota            Afficher ton quota global
   /image <texte>    Générer une image
@@ -3258,6 +3259,7 @@ Commandes :
         const m = await choose("Choisis ton modèle", [
           { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1" },
           { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4" },
+          { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6" },
           { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2" },
         ]);
         if (m) { model = m; saveCfg({ model: m }); console.log("Modèle : " + pastel("lemon", model)); }
