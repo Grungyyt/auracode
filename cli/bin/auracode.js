@@ -14,7 +14,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.4" };
+const PKG = { version: "0.8.5" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -138,25 +138,46 @@ async function checkUpdate() {
 }
 
 // Mise à jour : mode .exe via releases GitHub, mode script via fichiers du repo.
-async function selfUpdate() {
+async function selfUpdate(quiet = false) {
+  const lines = [];
+  const say = (t) => { lines.push(t); if (!quiet) console.log(t); };
+  const done = () => lines.join("\n");
+  const cmpVer = (a, b) => {
+    const pa = String(a || "").split(".").map((x) => parseInt(x, 10) || 0);
+    const pb = String(b || "").split(".").map((x) => parseInt(x, 10) || 0);
+    for (let i = 0; i < 3; i++) {
+      if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+    }
+    return 0;
+  };
   const isExe = process.platform === "win32" && /auracode\.exe$/i.test(process.execPath);
   if (isExe) {
-    console.log("Recherche de mise à jour...");
-    const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
-      headers: { "User-Agent": "auracode" },
-    });
-    if (!r.ok) { console.log("Impossible de contacter GitHub."); return; }
-    const rel = await r.json();
+    say("Recherche de mise à jour...");
+    let rel;
+    try {
+      const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
+        headers: { "User-Agent": "auracode" },
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      rel = await r.json();
+    } catch (e) {
+      say("Impossible de contacter GitHub (" + e.message + ").");
+      return done();
+    }
     const latest = (rel.tag_name || "").replace(/^v/, "");
-    if (!latest || latest === PKG.version) {
-      console.log("Déjà à jour (" + PKG.version + ").");
-      return;
+    if (!latest) {
+      say("Aucune release GitHub pour l'instant : réinstalle avec install.ps1 (mode script, toujours à jour).");
+      return done();
+    }
+    if (cmpVer(latest, PKG.version) <= 0) {
+      say("Déjà à jour (" + PKG.version + ").");
+      return done();
     }
     const asset = (rel.assets || []).find((a) => /auracode.*\.exe$/i.test(a.name));
-    if (!asset) { console.log("Aucun .exe dans la release " + rel.tag_name); return; }
+    if (!asset) { say("Aucun .exe dans la release " + rel.tag_name); return done(); }
     const exePath = process.execPath;
     const tmp = exePath + ".new";
-    console.log("Téléchargement " + latest + "...");
+    say("Téléchargement " + latest + "...");
     const dl = await fetch(asset.browser_download_url, { headers: { "User-Agent": "auracode" } });
     fs.writeFileSync(tmp, Buffer.from(await dl.arrayBuffer()));
     const ps = [
@@ -168,25 +189,32 @@ async function selfUpdate() {
     spawn("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], {
       detached: true, stdio: "ignore",
     }).unref();
-    console.log("Mise à jour installée, redémarrage...");
+    say("Mise à jour installée, redémarrage...");
     setTimeout(() => process.exit(0), 600);
-    return;
+    return done();
   }
   // Mode script (install.ps1 / npm link) : re-télécharge les fichiers du repo.
-  console.log("Mise à jour depuis GitHub...");
-  const base = "https://raw.githubusercontent.com/Grungyyt/auracode/main";
-  const head = { "User-Agent": "auracode" };
-  const rp = await (await fetch(base + "/cli/package.json", { headers: head })).json();
-  if (!rp.version || rp.version === PKG.version) {
-    console.log("Déjà à jour (" + PKG.version + ").");
-    return;
+  // Garde anti-downgrade : ne JAMAIS écraser par une version égale ou plus ancienne
+  // (protège le dossier de dev si update est lancé depuis le repo).
+  say("Mise à jour depuis GitHub...");
+  try {
+    const base = "https://raw.githubusercontent.com/Grungyyt/auracode/main";
+    const head = { "User-Agent": "auracode" };
+    const rp = await (await fetch(base + "/cli/package.json", { headers: head })).json();
+    if (!rp.version || cmpVer(rp.version, PKG.version) <= 0) {
+      say("Déjà à jour (" + PKG.version + ").");
+      return done();
+    }
+    const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
+    if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
+    const dir = path.dirname(__filename);
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
+    fs.writeFileSync(__filename, js);
+    say("Mis à jour vers " + rp.version + ". Quitte (Ctrl+C) et relance auracode.");
+  } catch (e) {
+    say("Échec : " + e.message);
   }
-  const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
-  if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
-  const dir = path.dirname(__filename);
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
-  fs.writeFileSync(__filename, js);
-  console.log("Mis à jour vers " + rp.version + ". Relance auracode.");
+  return done();
 }
 
 async function api(pathname, body, key, method = "POST", signal = undefined) {
@@ -1578,9 +1606,28 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "update": {
-          if (!screen.updateAvailable) { screen.sys("Déjà à jour (" + PKG.version + ")."); return; }
-          screen.sys("Lancement de la mise à jour vers " + screen.updateAvailable + "...");
-          await selfUpdate();
+          screen.sys("Recherche de mise à jour...");
+          screen.busy = true; screen.render();
+          let v;
+          try { v = await checkUpdate(); }
+          catch { v = undefined; }
+          screen.busy = false;
+          if (v === undefined) {
+            screen.sys("Vérification impossible (réseau ?). Réessaie /update.");
+            screen.render();
+            return;
+          }
+          if (!v) {
+            screen.sys("Déjà à jour (" + PKG.version + ").");
+            screen.render();
+            return;
+          }
+          screen.updateAvailable = v;
+          screen.sys("Mise à jour vers " + v + " (tu as " + PKG.version + ")...");
+          screen.render();
+          const msg = await selfUpdate(true);
+          String(msg).split("\n").forEach((l) => { if (l.trim()) screen.sys(l); });
+          screen.render();
           return;
         }
         default:
