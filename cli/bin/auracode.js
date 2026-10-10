@@ -14,7 +14,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.5" };
+const PKG = { version: "0.8.6" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -1713,8 +1713,17 @@ async function main() {
   if (ei >= 0 && args[ei + 1]) effort = args[ei + 1];
 
   if (args[0] === "login") {
+    const keysUrl = process.env.AURA_KEYS_URL || "https://ia.vth-mc.fr/profile/dev";
+    console.log("1. Connecte-toi avec VTH Auth ici : " + keysUrl);
+    try {
+      const plat = process.platform;
+      const cmd = plat === "win32" ? `start "" "${keysUrl}"` : plat === "darwin" ? `open "${keysUrl}"` : `xdg-open "${keysUrl}"`;
+      exec(cmd, { timeout: 10000 }, () => {});
+      console.log("(ouverture du navigateur...)");
+    } catch { /* ignore */ }
+    console.log("2. Copie ta clé ak-vth-... (section Clés API IA) et colle-la ci-dessous.\n");
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question("Colle ta clé API (ak-vth-... depuis /profile/dev) : ", (k) => {
+    rl.question("Colle ta clé API : ", (k) => {
       k = k.trim();
       if (!k) { console.log("Clé vide, annulé."); rl.close(); return; }
       const cfg = loadJson(CONFIG_FILE, {});
