@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.1.3" };
+const PKG = { version: "1.2.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -168,6 +168,12 @@ function uninstallCmds(dir, wipeData) {
   return cmds.join("; ");
 }
 
+const AURA13_AD = "✨ Aura 1.3 arrive vendredi 18 à 17h — 14B, le nouveau flagship";
+function adLine(W) {
+  const pad = " ".repeat(Math.max(0, Math.floor((W - AURA13_AD.length) / 2)));
+  return pad + P.bold + P.butter + AURA13_AD + P.reset;
+}
+
 function brandLine(W) {
   const plain = "Aura by VTH Group";
   const pad = " ".repeat(Math.max(0, Math.floor((W - plain.length) / 2)));
@@ -207,6 +213,7 @@ async function splash() {
     "",
   ];
   block.splice(block.length - 1, 0, brandLine(W));
+  block.splice(block.length - 1, 0, adLine(W));
   const topPad = Math.max(0, Math.floor((H - block.length - 1) / 2));
   const statusRow = topPad + block.length + 1;
   process.stdout.write("\x1b[?25l\x1b[2J\x1b[H");
@@ -651,7 +658,7 @@ async function cmdSetup() {
   const model = await choose("Étape 2/3 — Choisis ton modèle", [
     { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
     { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
-    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM)" },
+    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM) • 🔒 ven. 18 17h" },
     { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
   ]);
   if (!model) { console.log("Annulé."); rl.close(); return; }
