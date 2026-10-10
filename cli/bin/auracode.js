@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.1.0" };
+const PKG = { version: "1.1.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -200,27 +200,41 @@ async function splash() {
   process.stdout.write("\x1b[?25l\x1b[2J\x1b[H");
   process.stdout.write("\n".repeat(topPad));
   for (const ln of block) process.stdout.write(ln + "\n");
-  const setStatus = (txt, color) => {
+  const setStatus = (txt, color, rowOff = 0) => {
     const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
-    process.stdout.write(`\x1b[${statusRow};1H\x1b[K` + pad + (color ? P[color] + txt + P.reset : txt));
+    process.stdout.write(`\x1b[${statusRow + rowOff};1H\x1b[K` + pad + (color ? P[color] + txt + P.reset : txt));
   };
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-  let fi = 0, finished = false, latest = undefined;
+  const BAR_W = 26;
+  const bar = (p) => "█".repeat(Math.round(p * BAR_W)) + "─".repeat(BAR_W - Math.round(p * BAR_W));
+  // Phase 1 (2 s) : connexion au cloud VTH + barre de progression.
+  const healthP = fetch(API + "/health", { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false);
   const t0 = Date.now();
-  checkUpdate().then((v) => { latest = v; finished = true; });
-  const timer = setInterval(() => {
-    if (finished) return;
-    fi = (fi + 1) % frames.length;
-    setStatus(`${frames[fi]} Vérification des mises à jour…`, "lavender");
-  }, 80);
-  setStatus(`${frames[0]} Vérification des mises à jour…`, "lavender");
-  while (!finished) await sleep(60);
-  clearInterval(timer);
-  await sleep(Math.max(0, 800 - (Date.now() - t0)));
-  if (latest === undefined) setStatus("? Impossible de vérifier (hors ligne ?)", "peach");
-  else if (latest) setStatus(`↓ Mise à jour ${latest} disponible — tape /update dans le chat`, "lemon");
-  else setStatus(`✓ À jour (v${PKG.version})`, "mint");
-  await sleep(1100);
+  await new Promise((res) => {
+    const iv = setInterval(() => {
+      const p = Math.min(1, (Date.now() - t0) / 2000);
+      const fi = Math.floor(Date.now() / 80) % frames.length;
+      setStatus(`${frames[fi]} Connexion au cloud VTH  ${bar(p)}`, "lavender", 0);
+      if (p >= 1) { clearInterval(iv); res(); }
+    }, 50);
+  });
+  const cloudOk = await healthP;
+  setStatus(cloudOk ? "✓ Connecté au cloud VTH" : "… Cloud injoignable — vérifie ta connexion", cloudOk ? "mint" : "peach", 0);
+  // Phase 2 (2 s) : vérification des mises à jour.
+  let latest = undefined, done = false;
+  const t1 = Date.now();
+  checkUpdate().then((v) => { latest = v; done = true; });
+  await new Promise((res) => {
+    const iv = setInterval(() => {
+      if (done && Date.now() - t1 >= 2000) { clearInterval(iv); res(); return; }
+      const fi = Math.floor(Date.now() / 80) % frames.length;
+      setStatus(`${frames[fi]} Vérification des mises à jour…`, "lavender", 1);
+    }, 80);
+  });
+  if (latest === undefined) setStatus("? Impossible de vérifier (hors ligne ?)", "peach", 1);
+  else if (latest) setStatus(`↓ Mise à jour ${latest} disponible — tape /update dans le chat`, "lemon", 1);
+  else setStatus(`✓ À jour (v${PKG.version})`, "mint", 1);
+  await sleep(900);
   process.stdout.write("\x1b[?25h");
   return latest;
 }
