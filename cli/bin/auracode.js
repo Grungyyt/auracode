@@ -18,13 +18,15 @@ const HIST_FILE = path.join(HOME, "history.json");
 // ---------- Auth VTH (OAuth service AuraCode) ----------
 // La CLÉ PRIVÉE ne vit QUE sur le VPS (jamais dans ce fichier public).
 // Le CLI obtient access/refresh via le VPS (/api/auth/exchange).
-const VTH_FILE = path.join(HOME, "vth.json");
+const VTH_FILE = path.join(HOME, "vth.json"); // historique : plus jamais écrit (mémoire seule)
 const AURA_PUBLIC_ID = process.env.AURA_PUBLIC_ID || "N8FjCur0OABUofZBIwBibnEMTN9RrA4F";
 const AURA_AUTH_BASE = (process.env.AURA_AUTH_BASE || "https://auth.vth-mc.fr").replace(/\/$/, "");
 const AURA_LOGIN_PORT = parseInt(process.env.AURA_LOGIN_PORT || "3000", 10) || 3000;
-const loadVth = () => loadJson(VTH_FILE, {});
-const saveVth = (o) => saveJson(VTH_FILE, o);
-const clearVth = () => { try { fs.unlinkSync(VTH_FILE); } catch { /* ignore */ } };
+let memVthStore = null;
+const loadVth = () => memVthStore || {};
+const saveVth = (o) => { memVthStore = o; };
+const clearVth = () => { memVthStore = null; };
+let memApiKey = null;
 let vthCurrent = null; // access token en cours (évite les doubles refresh)
 const isVthToken = (k) => typeof k === "string" && k.startsWith("vth-acc.");
 // State CSRF 32 chars (doc VTH : lettres, chiffres, - et _).
@@ -76,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.7" };
+const PKG = { version: "0.8.8" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -129,7 +131,38 @@ function saveJson(p, obj) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(obj, null, 2));
 }
-const getKey = () => (loadJson(CONFIG_FILE, {}).apiKey || "").trim();
+const getKey = () => (memApiKey || "").trim();
+
+// Migration sécurité : les tokens ne sont plus stockés sur disque.
+// Purge au démarrage (une fois) : clé config + vth.json oubliés.
+function purgeStoredSecrets() {
+  let wiped = false;
+  try {
+    const cfg = loadJson(CONFIG_FILE, {});
+    if (cfg.apiKey) { delete cfg.apiKey; saveJson(CONFIG_FILE, cfg); wiped = true; }
+  } catch { /* ignore */ }
+  try {
+    if (fs.existsSync(VTH_FILE)) { fs.unlinkSync(VTH_FILE); wiped = true; }
+  } catch { /* ignore */ }
+  if (wiped) console.log("Anciens tokens locaux supprimés (désormais : mémoire seule, login à chaque lancement).");
+}
+
+// Dossier d'installation à désinstaller (jamais le dossier projet courant).
+function getInstallDir() {
+  if (process.platform === "win32") {
+    const base = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    return path.join(base, "AuraCode");
+  }
+  return path.join(os.homedir(), ".auracode-cli");
+}
+
+function uninstallCmds(dir, wipeData) {
+  const cmds = [];
+  cmds.push(`if (Test-Path '${dir}') { Remove-Item -Recurse -Force '${dir}' }`);
+  cmds.push(`$p=[Environment]::GetEnvironmentVariable('Path','User'); $n=($p -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ne '${dir}'.TrimEnd('\\') }) -join ';'; [Environment]::SetEnvironmentVariable('Path',$n,'User')`);
+  if (wipeData) cmds.push(`if (Test-Path '${HOME}') { Remove-Item -Recurse -Force '${HOME}' }`);
+  return cmds.join("; ");
+}
 
 async function splash() {
   // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
@@ -560,21 +593,11 @@ async function cmdSetup() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const askLine = (q) => new Promise((res) => rl.question(P.sky + "◆ " + q + P.reset + " ", res));
 
-  // 1. Clé API
-  let key = getKey();
-  if (key) {
-    console.log("\n" + pastel("mint", "✓ Clé API déjà enregistrée."));
-    const keep = await new Promise((res) =>
-      rl.question("La garder ? [O/n] ", (a) => res(!/^n(on)?$/i.test(a.trim()))));
-    if (!keep) key = "";
-  }
-  if (!key) {
-    console.log("\n" + pastel("lavender", "◆ Étape 1/3 — Colle ta clé API (ak-vth-... depuis https://auth.vth-mc.fr/profile)"));
-    key = (await askLine("Clé :")).trim();
-    if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
-    const cfg = loadJson(CONFIG_FILE, {});
-    cfg.apiKey = key; saveJson(CONFIG_FILE, cfg);
-  }
+  // 1. Clé API (mémoire seule : jamais stockée, login à chaque lancement)
+  console.log("\n" + pastel("lavender", "◆ Étape 1/3 — Colle ta clé API (ak-vth-... depuis https://auth.vth-mc.fr/profile)"));
+  const key = (await askLine("Clé :")).trim();
+  if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
+  memApiKey = key;
 
   // 2. Modèle (avec stats visibles)
   console.log("");
@@ -595,7 +618,7 @@ async function cmdSetup() {
   ])) || "middle";
 
   const cfg = loadJson(CONFIG_FILE, {});
-  cfg.apiKey = key; cfg.model = model; cfg.effort = effort;
+  cfg.model = model; cfg.effort = effort;
   saveJson(CONFIG_FILE, cfg);
   rl.close();
 
@@ -736,6 +759,7 @@ const COMMANDS = [
   { name: "/copy", desc: "Copier une réponse : /copy [n]" },
   { name: "/export", desc: "Sauver en markdown : /export [fichier]" },
   { name: "/update", desc: "Mettre à jour AuraCode" },
+  { name: "/uninstall", desc: "Désinstaller le programme" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
@@ -1672,6 +1696,17 @@ async function runTUI(state, updateAvailable) {
           } catch (e) { screen.tool("sysinfo", false, null, e.message); }
           return;
         }
+        case "uninstall": {
+          screen.sys("Désinstalle le programme + entrée PATH" + (fs.existsSync(getInstallDir()) ? "" : " (dossier introuvable)") + ".");
+          if (!(await screen.confirm("Désinstaller AuraCode ?"))) { screen.sys("Annulé."); return; }
+          const wipe = await screen.confirm("Supprimer aussi ~/.auracode (réglages, historique) ?");
+          const { spawn } = require("child_process");
+          spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(getInstallDir(), wipe)], { detached: true, stdio: "ignore" }).unref();
+          screen.sys("Désinstallé. Fermeture...");
+          screen.render();
+          setTimeout(() => { screen.quit(); setTimeout(() => process.exit(0), 400); }, 600);
+          return;
+        }
         case "update": {
           screen.sys("Recherche de mise à jour...");
           screen.busy = true; screen.render();
@@ -1835,14 +1870,48 @@ async function cmdLoginOAuth() {
   return !!ok;
 }
 
+// Désinstallation propre : programme + entrée PATH, puis (option) données locales.
+// Exécutée dans un processus détaché car le script en cours ne peut pas toujours
+// s'auto-supprimer sous Windows. Ne touche JAMAIS au dossier projet courant.
+async function cmdUninstall() {
+  const dir = getInstallDir();
+  let hasInstall = false;
+  try { hasInstall = fs.existsSync(dir); } catch { /* ignore */ }
+  console.log(P.bold + P.pink + "Désinstaller AuraCode ?" + P.reset);
+  if (hasInstall) console.log("  Supprimé : " + dir + " (programme)");
+  else console.log("  (aucune installation programme trouvée : " + dir + ")");
+  console.log("  Retiré du PATH utilisateur (si présent).");
+  console.log("  Les conversations serveur sont conservées (compte intact).");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const askYN = (q) => new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
+  if (!(await askYN("Désinstaller le programme ?"))) { console.log("Annulé."); rl.close(); return; }
+  const wipeData = await askYN("Supprimer aussi les données locales (~/.auracode : réglages, historique, sessions) ?");
+  rl.close();
+  if (process.platform === "win32") {
+    const { spawn } = require("child_process");
+    console.log("Suppression en cours (tu peux fermer ce terminal)...");
+    spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(dir, wipeData)], { detached: true, stdio: "ignore" }).unref();
+  } else {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log("Dossier programme : " + e.message); }
+    console.log("(pense à retirer " + dir + " de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
+    if (wipeData) {
+      try { fs.rmSync(HOME, { recursive: true, force: true }); } catch (e) { console.log("Données : " + e.message); }
+    }
+  }
+  console.log("Désinstallé. Au revoir !");
+  setTimeout(() => process.exit(0), 800);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(PKG.version); return; }
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
+  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/ = suggestions, @fichier, Ctrl+P palette, F1 aide)\n`);
     return;
   }
+  purgeStoredSecrets();
   let model = "aura-1.1-code", effort = "high", lang = "fr";
   try {
     const saved = loadJson(CONFIG_FILE, {});
@@ -1864,9 +1933,8 @@ async function main() {
     rl.question("Colle ta clé API : ", (k) => {
       k = k.trim();
       if (!k) { console.log("Clé vide, annulé."); rl.close(); return; }
-      const cfg = loadJson(CONFIG_FILE, {});
-      cfg.apiKey = k; saveJson(CONFIG_FILE, cfg);
-      console.log("Connecté ✓ (clé enregistrée dans ~/.auracode/config.json)");
+      memApiKey = k;
+      console.log("Connecté ✓ (clé gardée en mémoire seule — login à refaire au prochain lancement)");
       rl.close();
     });
     return;
@@ -1874,8 +1942,13 @@ async function main() {
   if (args[0] === "logout") {
     const cfg = loadJson(CONFIG_FILE, {});
     delete cfg.apiKey; saveJson(CONFIG_FILE, cfg);
+    memApiKey = null;
     clearVth(); vthCurrent = null;
-    console.log("Déconnecté (clé API + compte VTH oubliés).");
+    console.log("Déconnecté (clé API + compte VTH oubliés de la mémoire).");
+    return;
+  }
+  if (args[0] === "uninstall") {
+    await cmdUninstall();
     return;
   }
   if (args[0] === "setup") {
@@ -1914,10 +1987,16 @@ async function main() {
   const updateAvailable = await splash();
   let key = getKey() || await vthAccess() || "";
   if (!key) {
-    console.log(pastel("peach", "Aucune configuration détectée — lancement de l'installation.\n"));
-    await cmdSetup();
+    // Connexion sans rien taper : navigateur d'abord, setup manuel en secours.
+    console.log("Connexion VTH requise — ouverture du navigateur (aucune saisie nécessaire)...\n");
+    await cmdLoginOAuth();
     key = getKey() || await vthAccess() || "";
-    if (!key) return;
+    if (!key) {
+      console.log("Navigateur indisponible — configuration manuelle.\n");
+      await cmdSetup();
+      key = getKey() || await vthAccess() || "";
+      if (!key) return;
+    }
   }
   try {
     if (!getSessionId()) {
