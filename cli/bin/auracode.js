@@ -13,7 +13,7 @@ const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.7.0" };
+const PKG = { version: "0.7.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -68,26 +68,54 @@ function saveJson(p, obj) {
 }
 const getKey = () => (loadJson(CONFIG_FILE, {}).apiKey || "").trim();
 
-async function intro() {
-  const W = process.stdout.columns || 80;
-  const show = (text, color) => {
-    const pad = " ".repeat(Math.max(0, Math.floor((W - text.length) / 2)));
-    console.log(pad + (color ? P[color] + text + P.reset : text));
-  };
-  console.log("");
-  ART_LINES.forEach((ln, i) => show(ln, ART_COLORS[i % ART_COLORS.length]));
-  show("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky");
-  console.log("");
-  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-  const start = Date.now();
-  let i = 0;
-  while (Date.now() - start < 2000) {
-    const label = `Connexion au cloud VTH ${frames[i++ % frames.length]} `;
-    process.stdout.write("\r" + " ".repeat(Math.max(0, Math.floor((W - label.length) / 2))) + pastel("lavender", label));
-    await sleep(80);
+async function splash() {
+  // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
+  // Retourne : version dispo (string), null (à jour), undefined (hors ligne).
+  if (!process.stdout.isTTY) {
+    console.log(`AuraCode v${PKG.version}`);
+    return checkUpdate();
   }
-  const ok = "Connecté au cloud VTH ✓";
-  process.stdout.write("\r" + " ".repeat(Math.max(0, Math.floor((W - ok.length) / 2))) + pastel("mint", ok) + "                    \n");
+  const W = process.stdout.columns || 80;
+  const H = process.stdout.rows || 24;
+  const center = (text, color) => {
+    const pad = " ".repeat(Math.max(0, Math.floor((W - text.length) / 2)));
+    return pad + (color ? P[color] + text + P.reset : text);
+  };
+  const block = [
+    ...ART_LINES.map((ln, i) => center(ln, ART_COLORS[i % ART_COLORS.length])),
+    center("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky"),
+    "",
+    center(`v${PKG.version}`, "dim"),
+    "",
+  ];
+  const topPad = Math.max(0, Math.floor((H - block.length - 1) / 2));
+  const statusRow = topPad + block.length + 1;
+  process.stdout.write("\x1b[?25l\x1b[2J\x1b[H");
+  process.stdout.write("\n".repeat(topPad));
+  for (const ln of block) process.stdout.write(ln + "\n");
+  const setStatus = (txt, color) => {
+    const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
+    process.stdout.write(`\x1b[${statusRow};1H\x1b[K` + pad + (color ? P[color] + txt + P.reset : txt));
+  };
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let fi = 0, finished = false, latest = undefined;
+  const t0 = Date.now();
+  checkUpdate().then((v) => { latest = v; finished = true; });
+  const timer = setInterval(() => {
+    if (finished) return;
+    fi = (fi + 1) % frames.length;
+    setStatus(`${frames[fi]} Vérification des mises à jour…`, "lavender");
+  }, 80);
+  setStatus(`${frames[0]} Vérification des mises à jour…`, "lavender");
+  while (!finished) await sleep(60);
+  clearInterval(timer);
+  await sleep(Math.max(0, 800 - (Date.now() - t0)));
+  if (latest === undefined) setStatus("? Impossible de vérifier (hors ligne ?)", "peach");
+  else if (latest) setStatus(`↓ Mise à jour ${latest} disponible — tape /update dans le chat`, "lemon");
+  else setStatus(`✓ À jour (v${PKG.version})`, "mint");
+  await sleep(1100);
+  process.stdout.write("\x1b[?25h");
+  return latest;
 }
 
 async function checkUpdate() {
@@ -99,13 +127,13 @@ async function checkUpdate() {
       headers: { "User-Agent": "auracode" },
     });
     clearTimeout(t);
-    if (!r.ok) return null;
+    if (!r.ok) return undefined;
     const latest = (await r.json()).version;
     if (latest && latest !== PKG.version) {
       return latest;
     }
-  } catch { /* silencieux */ }
-  return null;
+    return null;
+  } catch { return undefined; }
 }
 
 // Mise à jour : mode .exe via releases GitHub, mode script via fichiers du repo.
@@ -996,6 +1024,14 @@ async function runTUI(state, updateAvailable) {
   };
 
   screen.start();
+  // Re-vérification auto toutes les 30 min pendant la session.
+  const updTimer = setInterval(async () => {
+    try {
+      const v = await checkUpdate();
+      if (v && !screen.updateAvailable) { screen.updateAvailable = v; screen.render(); }
+    } catch { /* silencieux */ }
+  }, 30 * 60 * 1000);
+  if (updTimer.unref) updTimer.unref();
   screen.sys(`Modèle ${state.model} • effort ${state.effort} • dossier ${process.cwd()}`);
   screen.sys("Tape / pour voir les commandes. Les réponses s'affichent ici en direct.");
   screen.busy = true;
@@ -1003,6 +1039,7 @@ async function runTUI(state, updateAvailable) {
   screen.busy = false;
   screen.render();
   await screen.loop();
+  clearInterval(updTimer);
 }
 
 async function main() {
@@ -1075,8 +1112,7 @@ async function main() {
     return;
   }
 
-  await intro();
-  const updateAvailable = await checkUpdate();
+  const updateAvailable = await splash();
   let key = getKey();
   if (!key) {
     console.log(pastel("peach", "Aucune configuration détectée — lancement de l'installation.\n"));
