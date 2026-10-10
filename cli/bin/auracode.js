@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "0.8.8" };
+const PKG = { version: "0.8.9" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -477,12 +477,15 @@ async function timedCall(fn, onTick) {
 
 async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   let sessionId = getSessionId();
-  prompt = SYSTEM + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]\nDemande de l'utilisateur : ` + prompt;
+  // Protocole d'outils + contexte PC dans l'historique d'appel (JAMAIS dans le message :
+  // le message est stocké tel quel et réaffiché sur le web, sans le protocole).
+  const userAsk = prompt;
+  const home = os.homedir();
+  const preamble = SYSTEM + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
   const callChat = async (sid, hist) =>
-    api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: hist }, key, "POST", ui.signal);
+    api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: [{ role: "user", content: preamble }, ...hist] }, key, "POST", ui.signal);
 
   if (!sessionId) sessionId = await newSession(key, model);
-  const userAsk = prompt;
   const history = [];
   let totalTime = 0, forced = 0;
   for (let step = 0; step < 12; step++) {
