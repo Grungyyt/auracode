@@ -12,7 +12,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.3" };
+const PKG = { version: "1.3.0.4" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -84,6 +84,110 @@ function uninstallCmds(dir, wipeData) {
   cmds.push(`$p=[Environment]::GetEnvironmentVariable('Path','User'); $n=($p -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ne '${dir}'.TrimEnd('\\') }) -join ';'; [Environment]::SetEnvironmentVariable('Path',$n,'User')`);
   if (wipeData) cmds.push(`if (Test-Path '${HOME}') { Remove-Item -Recurse -Force '${HOME}' }`);
   return cmds.join("; ");
+}
+
+// --- Désinstallation réelle : détection du mode + plan + script ---
+// classifyInstall(o) est pur et testable : o = { execPath, filename, localData }.
+// kind: 'exe' (binaire SEA) | 'npm' (npm -g) | 'script' (install.ps1) | 'repo' (sources dev).
+function classifyInstall(o) {
+  o = o || {};
+  const f = String(o.filename || "");
+  const e = String(o.execPath || "");
+  if (/auracode\.exe$/i.test(e)) return { kind: "exe", dir: path.dirname(e) };
+  const m = /node_modules[\\/]auracode([\\/]|$)/i.exec(f);
+  if (m) {
+    let dir = f.slice(0, m.index + m[0].length);
+    dir = dir.replace(/[\\/]+$/, "");
+    return { kind: "npm", dir };
+  }
+  const local = o.localData ? path.join(o.localData, "AuraCode") : "";
+  if (local) {
+    const fl = f.toLowerCase();
+    const ll = local.toLowerCase();
+    if (fl === ll || fl.startsWith(ll + path.sep)) return { kind: "script", dir: local };
+  }
+  return { kind: "repo", dir: "" };
+}
+
+function detectInstall() {
+  const info = classifyInstall({
+    execPath: process.execPath,
+    filename: __filename,
+    localData: process.platform === "win32" ? (process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local")) : "",
+  });
+  let exists = false;
+  try { exists = !!info.dir && fs.existsSync(info.dir); } catch { exists = false; }
+  info.exists = exists;
+  return info;
+}
+
+// Plan de suppression. removePaths = fichiers/dossiers à supprimer (avec réessais),
+// rmdirParents = dossiers à supprimer seulement si vides, pathStrip = retirés du PATH.
+// En mode repo, on ne touche JAMAIS au code (removePaths vide).
+function uninstallPlan(info) {
+  const strip = [];
+  try { const d = getInstallDir(); if (d) strip.push(d); } catch { /* ignore */ }
+  const uniq = (a) => [...new Set(a.filter(Boolean))];
+  if (info.kind === "exe") {
+    const exe = process.execPath;
+    return { removePaths: [exe], rmdirParents: [path.dirname(exe)], pathStrip: uniq(strip.concat([path.dirname(exe)])) };
+  }
+  if (info.kind === "npm" || info.kind === "script") {
+    const dirs = info.dir ? [info.dir] : [];
+    return { removePaths: dirs, rmdirParents: [], pathStrip: uniq(strip.concat(dirs)) };
+  }
+  return { removePaths: [], rmdirParents: [], pathStrip: strip };
+}
+
+// Génère le script .ps1 de désinstallation (pur, testable).
+// Le script attend la fin du processus parent (pid, timeout 60s), supprime les
+// cibles avec réessais (12 x 500ms, fichiers verrouillés), vide les dossiers
+// parents seulement s'ils sont vides, nettoie le PATH utilisateur (match exact,
+// insensible à la casse), efface les données si demandé, journalise dans logFile,
+// puis s'auto-supprime.
+function buildUninstallerPs(o) {
+  o = o || {};
+  const pid = parseInt(o.pid, 10) || 0;
+  const q = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+  const arr = (a) => "@(" + (a || []).filter(Boolean).map((x) => q(x)).join(", ") + ")";
+  const L = [];
+  L.push("$ErrorActionPreference = 'SilentlyContinue'");
+  L.push(`$log = ${q(o.logFile || "")}`);
+  L.push("function L($m) { if ($log) { Add-Content -LiteralPath $log -Value ('[' + (Get-Date -Format o) + '] ' + $m) } }");
+  L.push(`L ${q("--- debut desinstallation (pid parent: " + pid + ") ---")}`);
+  L.push("$n = 0");
+  L.push(`while ($n -lt 120) { $p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p -or $p.HasExited) { break }; Start-Sleep -Milliseconds 500; $n++ }`);
+  L.push("L 'parent termine (ou timeout 60s), suppression...'");
+  L.push(`$i = 0`);
+  L.push(`foreach ($t in ${arr(o.removePaths)}) {`);
+  L.push(`  $ok = $false; $tr = 0`);
+  L.push(`  while (-not $ok -and $tr -lt 24) {`);
+  L.push(`    try { if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction Stop }; $ok = $true }`);
+  L.push(`    catch { $tr++; Start-Sleep -Milliseconds 500 }`);
+  L.push(`  }`);
+  L.push(`  $i++; if ($ok) { L ('OK [' + $i + ']: ' + $t) } else { L ('ECHEC [' + $i + ']: ' + $t) }`);
+  L.push(`}`);
+  L.push(`foreach ($d in ${arr(o.rmdirParents)}) {`);
+  L.push(`  try { if ((Get-ChildItem -LiteralPath $d -Force | Measure-Object).Count -eq 0) { Remove-Item -LiteralPath $d -Force; L ('dossier vide supprime: ' + $d) } else { L ('dossier conserve (non vide): ' + $d) } } catch { L ('dossier ECHEC: ' + $d) }`);
+  L.push(`}`);
+  L.push(`$tl = ${arr(o.pathStrip)}`);
+  L.push(`$tlNorm = @($tl | ForEach-Object { $_.TrimEnd('\\', '/').ToLower() })`);
+  L.push(`$path = [Environment]::GetEnvironmentVariable('Path', 'User')`);
+  L.push(`$parts = @($path -split ';' | Where-Object { $_ -and $_.Trim() -ne '' })`);
+  L.push(`$keep = @($parts | Where-Object { $tlNorm -notcontains $_.Trim().TrimEnd('\\', '/').ToLower() })`);
+  L.push(`[Environment]::SetEnvironmentVariable('Path', ($keep -join ';'), 'User')`);
+  L.push(`L 'PATH nettoye'`);
+  if (o.wipeData && o.homeDir) {
+    L.push(`$hd = ${q(o.homeDir)}`);
+    L.push(`$okd = $false; $trd = 0`);
+    L.push(`while (-not $okd -and $trd -lt 24) { try { if (Test-Path -LiteralPath $hd) { Remove-Item -LiteralPath $hd -Recurse -Force -ErrorAction Stop }; $okd = $true } catch { $trd++; Start-Sleep -Milliseconds 500 } }`);
+    L.push(`if ($okd) { L 'donnees OK' } else { L 'donnees ECHEC' }`);
+  } else {
+    L.push(`L 'donnees conservees'`);
+  }
+  L.push(`L '--- fin ---'`);
+  L.push(`Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force`);
+  return L.join("\r\n");
 }
 
 const AURA13_LAUNCH_ISO = "2026-10-18T15:00:00+00:00"; // 17h Paris (été, UTC+2)

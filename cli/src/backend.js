@@ -492,13 +492,35 @@ async function cmdLoginOAuth() {
 // Désinstallation propre : programme + entrée PATH, puis (option) données locales.
 // Exécutée dans un processus détaché car le script en cours ne peut pas toujours
 // s'auto-supprimer sous Windows. Ne touche JAMAIS au dossier projet courant.
+// npm rm -g : retourne { ok, msg } (l'appelant affiche, compatible CLI + TUI).
+function npmRmGlobal() {
+  try {
+    const { spawnSync } = require("child_process");
+    const r = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["rm", "-g", "auracode"], { stdio: "pipe", encoding: "utf8" });
+    if (r.status === 0) return { ok: true, msg: "npm : paquet supprimé." };
+    const detail = String((r.stderr || "") + (r.stdout || "")).trim().slice(0, 300);
+    return { ok: false, msg: "npm : échec (code " + r.status + ")" + (detail ? " : " + detail : "") + ", suppression manuelle du dossier prévue." };
+  } catch (e) { return { ok: false, msg: "npm : impossible (" + e.message + "), suppression manuelle du dossier prévue." }; }
+}
+
 async function cmdUninstall() {
-  const dir = getInstallDir();
-  let hasInstall = false;
-  try { hasInstall = fs.existsSync(dir); } catch { /* ignore */ }
+  const info = detectInstall();
+  const plan = uninstallPlan(info);
   console.log(P.bold + P.pink + "Désinstaller AuraCode ?" + P.reset);
-  if (hasInstall) console.log("  Supprimé : " + dir + " (programme)");
-  else console.log("  (aucune installation programme trouvée : " + dir + ")");
+  if (info.kind === "npm") {
+    console.log("  Mode détecté : npm global (" + (info.dir || "?") + (info.exists ? "" : ", dossier absent") + ")");
+    console.log("  Supprimé via : npm rm -g auracode (+ nettoyage manuel en secours)");
+  } else if (info.kind === "exe") {
+    console.log("  Mode détecté : exécutable : " + process.execPath);
+    console.log("  Supprimé : le fichier .exe (après fermeture, avec réessais) + dossier vide si vide");
+  } else if (info.kind === "script") {
+    console.log("  Mode détecté : script install.ps1 (" + (info.dir || "?") + (info.exists ? "" : ", dossier absent") + ")");
+  } else {
+    console.log("  Mode détecté : sources de développement — le code ne sera PAS supprimé.");
+    console.log("  Seront nettoyés : entrées PATH AuraCode + (option) données locales.");
+  }
+  plan.removePaths.forEach((p) => console.log("  Supprimé : " + p));
+  plan.rmdirParents.forEach((p) => console.log("  Dossier vidé si vide : " + p));
   console.log("  Retiré du PATH utilisateur (si présent).");
   console.log("  Les conversations serveur sont conservées (compte intact).");
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -506,18 +528,29 @@ async function cmdUninstall() {
   if (!(await askYN("Désinstaller le programme ?"))) { console.log("Annulé."); rl.close(); return; }
   const wipeData = await askYN("Supprimer aussi les données locales (~/.auracode : réglages, historique, sessions) ?");
   rl.close();
-  if (process.platform === "win32") {
-    const { spawn } = require("child_process");
-    console.log("Suppression en cours (tu peux fermer ce terminal)...");
-    spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(dir, wipeData)], { detached: true, stdio: "ignore" }).unref();
-  } else {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log("Dossier programme : " + e.message); }
-    console.log("(pense à retirer " + dir + " de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
-    if (wipeData) {
-      try { fs.rmSync(HOME, { recursive: true, force: true }); } catch (e) { console.log("Données : " + e.message); }
-    }
+  if (info.kind === "npm") {
+    const nr = npmRmGlobal();
+    console.log("  " + nr.msg);
   }
-  console.log("Désinstallé. Au revoir !");
+  if (process.platform !== "win32") {
+    // Pas de verrou d'exécutable hors Windows : suppression directe.
+    for (const p of plan.removePaths) { try { fs.rmSync(p, { recursive: true, force: true }); console.log("  OK : " + p); } catch (e) { console.log("  ECHEC : " + p + " (" + e.message + ")"); } }
+    console.log("(pense à retirer les dossiers AuraCode de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
+    if (wipeData) {
+      try { fs.rmSync(HOME, { recursive: true, force: true }); console.log("  Données supprimées."); } catch (e) { console.log("  Données : " + e.message); }
+    }
+    console.log("Désinstallé. Au revoir !");
+    setTimeout(() => process.exit(0), 800);
+    return;
+  }
+  const logFile = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".log");
+  const ps1 = buildUninstallerPs({ pid: process.pid, removePaths: plan.removePaths, rmdirParents: plan.rmdirParents, pathStrip: plan.pathStrip, wipeData, homeDir: HOME, logFile });
+  const file = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".ps1");
+  fs.writeFileSync(file, ps1);
+  console.log("Suppression en cours (détail : " + logFile + ")...");
+  const { spawn } = require("child_process");
+  spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file], { detached: true, stdio: "ignore" }).unref();
+  console.log("Désinstallé (vérifie dans un NOUVEAU terminal : where auracode doit échouer). Au revoir !");
   setTimeout(() => process.exit(0), 800);
 }
 

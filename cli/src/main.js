@@ -402,12 +402,33 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "uninstall": {
-          screen.sys("Désinstalle le programme + entrée PATH" + (fs.existsSync(getInstallDir()) ? "" : " (dossier introuvable)") + ".");
+          const info = detectInstall();
+          const plan = uninstallPlan(info);
+          screen.sys("Désinstallation (" + info.kind + (info.dir ? " : " + info.dir : "") + ").");
+          plan.removePaths.forEach((p) => screen.sys("  Supprimé : " + p));
           if (!(await screen.confirm("Désinstaller AuraCode ?"))) { screen.sys("Annulé."); return; }
           const wipe = await screen.confirm("Supprimer aussi ~/.auracode (réglages, historique) ?");
+          if (info.kind === "npm") {
+            screen.busy = true; screen.sys("npm rm -g auracode ..."); screen.render();
+            const nr = npmRmGlobal();
+            screen.sys(nr.msg);
+            screen.busy = false; screen.render();
+          }
+          if (process.platform !== "win32") {
+            for (const p of plan.removePaths) { try { fs.rmSync(p, { recursive: true, force: true }); screen.sys("OK : " + p); } catch (e) { screen.sys("ECHEC : " + p); } }
+            screen.sys("(pense à retirer les dossiers AuraCode de ton PATH shell)");
+            if (wipe) { try { fs.rmSync(HOME, { recursive: true, force: true }); screen.sys("Données supprimées."); } catch (e) { screen.sys("Données : " + e.message); } }
+            screen.sys("Désinstallé. Quitte et vérifie dans un nouveau terminal.");
+            screen.render();
+            return;
+          }
+          const logFile = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".log");
+          const ps1 = buildUninstallerPs({ pid: process.pid, removePaths: plan.removePaths, rmdirParents: plan.rmdirParents, pathStrip: plan.pathStrip, wipeData: wipe, homeDir: HOME, logFile });
+          const file = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".ps1");
+          fs.writeFileSync(file, ps1);
           const { spawn } = require("child_process");
-          spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(getInstallDir(), wipe)], { detached: true, stdio: "ignore" }).unref();
-          screen.sys("Désinstallé. Fermeture...");
+          spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file], { detached: true, stdio: "ignore" }).unref();
+          screen.sys("Désinstallé. Fermeture... (log : " + logFile + ")");
           screen.render();
           setTimeout(() => { screen.quit(); setTimeout(() => process.exit(0), 400); }, 600);
           return;

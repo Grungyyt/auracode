@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.3" };
+const PKG = { version: "1.3.0.4" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -91,6 +91,110 @@ function uninstallCmds(dir, wipeData) {
   cmds.push(`$p=[Environment]::GetEnvironmentVariable('Path','User'); $n=($p -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ne '${dir}'.TrimEnd('\\') }) -join ';'; [Environment]::SetEnvironmentVariable('Path',$n,'User')`);
   if (wipeData) cmds.push(`if (Test-Path '${HOME}') { Remove-Item -Recurse -Force '${HOME}' }`);
   return cmds.join("; ");
+}
+
+// --- Désinstallation réelle : détection du mode + plan + script ---
+// classifyInstall(o) est pur et testable : o = { execPath, filename, localData }.
+// kind: 'exe' (binaire SEA) | 'npm' (npm -g) | 'script' (install.ps1) | 'repo' (sources dev).
+function classifyInstall(o) {
+  o = o || {};
+  const f = String(o.filename || "");
+  const e = String(o.execPath || "");
+  if (/auracode\.exe$/i.test(e)) return { kind: "exe", dir: path.dirname(e) };
+  const m = /node_modules[\\/]auracode([\\/]|$)/i.exec(f);
+  if (m) {
+    let dir = f.slice(0, m.index + m[0].length);
+    dir = dir.replace(/[\\/]+$/, "");
+    return { kind: "npm", dir };
+  }
+  const local = o.localData ? path.join(o.localData, "AuraCode") : "";
+  if (local) {
+    const fl = f.toLowerCase();
+    const ll = local.toLowerCase();
+    if (fl === ll || fl.startsWith(ll + path.sep)) return { kind: "script", dir: local };
+  }
+  return { kind: "repo", dir: "" };
+}
+
+function detectInstall() {
+  const info = classifyInstall({
+    execPath: process.execPath,
+    filename: __filename,
+    localData: process.platform === "win32" ? (process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local")) : "",
+  });
+  let exists = false;
+  try { exists = !!info.dir && fs.existsSync(info.dir); } catch { exists = false; }
+  info.exists = exists;
+  return info;
+}
+
+// Plan de suppression. removePaths = fichiers/dossiers à supprimer (avec réessais),
+// rmdirParents = dossiers à supprimer seulement si vides, pathStrip = retirés du PATH.
+// En mode repo, on ne touche JAMAIS au code (removePaths vide).
+function uninstallPlan(info) {
+  const strip = [];
+  try { const d = getInstallDir(); if (d) strip.push(d); } catch { /* ignore */ }
+  const uniq = (a) => [...new Set(a.filter(Boolean))];
+  if (info.kind === "exe") {
+    const exe = process.execPath;
+    return { removePaths: [exe], rmdirParents: [path.dirname(exe)], pathStrip: uniq(strip.concat([path.dirname(exe)])) };
+  }
+  if (info.kind === "npm" || info.kind === "script") {
+    const dirs = info.dir ? [info.dir] : [];
+    return { removePaths: dirs, rmdirParents: [], pathStrip: uniq(strip.concat(dirs)) };
+  }
+  return { removePaths: [], rmdirParents: [], pathStrip: strip };
+}
+
+// Génère le script .ps1 de désinstallation (pur, testable).
+// Le script attend la fin du processus parent (pid, timeout 60s), supprime les
+// cibles avec réessais (12 x 500ms, fichiers verrouillés), vide les dossiers
+// parents seulement s'ils sont vides, nettoie le PATH utilisateur (match exact,
+// insensible à la casse), efface les données si demandé, journalise dans logFile,
+// puis s'auto-supprime.
+function buildUninstallerPs(o) {
+  o = o || {};
+  const pid = parseInt(o.pid, 10) || 0;
+  const q = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+  const arr = (a) => "@(" + (a || []).filter(Boolean).map((x) => q(x)).join(", ") + ")";
+  const L = [];
+  L.push("$ErrorActionPreference = 'SilentlyContinue'");
+  L.push(`$log = ${q(o.logFile || "")}`);
+  L.push("function L($m) { if ($log) { Add-Content -LiteralPath $log -Value ('[' + (Get-Date -Format o) + '] ' + $m) } }");
+  L.push(`L ${q("--- debut desinstallation (pid parent: " + pid + ") ---")}`);
+  L.push("$n = 0");
+  L.push(`while ($n -lt 120) { $p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p -or $p.HasExited) { break }; Start-Sleep -Milliseconds 500; $n++ }`);
+  L.push("L 'parent termine (ou timeout 60s), suppression...'");
+  L.push(`$i = 0`);
+  L.push(`foreach ($t in ${arr(o.removePaths)}) {`);
+  L.push(`  $ok = $false; $tr = 0`);
+  L.push(`  while (-not $ok -and $tr -lt 24) {`);
+  L.push(`    try { if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction Stop }; $ok = $true }`);
+  L.push(`    catch { $tr++; Start-Sleep -Milliseconds 500 }`);
+  L.push(`  }`);
+  L.push(`  $i++; if ($ok) { L ('OK [' + $i + ']: ' + $t) } else { L ('ECHEC [' + $i + ']: ' + $t) }`);
+  L.push(`}`);
+  L.push(`foreach ($d in ${arr(o.rmdirParents)}) {`);
+  L.push(`  try { if ((Get-ChildItem -LiteralPath $d -Force | Measure-Object).Count -eq 0) { Remove-Item -LiteralPath $d -Force; L ('dossier vide supprime: ' + $d) } else { L ('dossier conserve (non vide): ' + $d) } } catch { L ('dossier ECHEC: ' + $d) }`);
+  L.push(`}`);
+  L.push(`$tl = ${arr(o.pathStrip)}`);
+  L.push(`$tlNorm = @($tl | ForEach-Object { $_.TrimEnd('\\', '/').ToLower() })`);
+  L.push(`$path = [Environment]::GetEnvironmentVariable('Path', 'User')`);
+  L.push(`$parts = @($path -split ';' | Where-Object { $_ -and $_.Trim() -ne '' })`);
+  L.push(`$keep = @($parts | Where-Object { $tlNorm -notcontains $_.Trim().TrimEnd('\\', '/').ToLower() })`);
+  L.push(`[Environment]::SetEnvironmentVariable('Path', ($keep -join ';'), 'User')`);
+  L.push(`L 'PATH nettoye'`);
+  if (o.wipeData && o.homeDir) {
+    L.push(`$hd = ${q(o.homeDir)}`);
+    L.push(`$okd = $false; $trd = 0`);
+    L.push(`while (-not $okd -and $trd -lt 24) { try { if (Test-Path -LiteralPath $hd) { Remove-Item -LiteralPath $hd -Recurse -Force -ErrorAction Stop }; $okd = $true } catch { $trd++; Start-Sleep -Milliseconds 500 } }`);
+    L.push(`if ($okd) { L 'donnees OK' } else { L 'donnees ECHEC' }`);
+  } else {
+    L.push(`L 'donnees conservees'`);
+  }
+  L.push(`L '--- fin ---'`);
+  L.push(`Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force`);
+  return L.join("\r\n");
 }
 
 const AURA13_LAUNCH_ISO = "2026-10-18T15:00:00+00:00"; // 17h Paris (été, UTC+2)
@@ -1039,13 +1143,35 @@ async function cmdLoginOAuth() {
 // Désinstallation propre : programme + entrée PATH, puis (option) données locales.
 // Exécutée dans un processus détaché car le script en cours ne peut pas toujours
 // s'auto-supprimer sous Windows. Ne touche JAMAIS au dossier projet courant.
+// npm rm -g : retourne { ok, msg } (l'appelant affiche, compatible CLI + TUI).
+function npmRmGlobal() {
+  try {
+    const { spawnSync } = require("child_process");
+    const r = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["rm", "-g", "auracode"], { stdio: "pipe", encoding: "utf8" });
+    if (r.status === 0) return { ok: true, msg: "npm : paquet supprimé." };
+    const detail = String((r.stderr || "") + (r.stdout || "")).trim().slice(0, 300);
+    return { ok: false, msg: "npm : échec (code " + r.status + ")" + (detail ? " : " + detail : "") + ", suppression manuelle du dossier prévue." };
+  } catch (e) { return { ok: false, msg: "npm : impossible (" + e.message + "), suppression manuelle du dossier prévue." }; }
+}
+
 async function cmdUninstall() {
-  const dir = getInstallDir();
-  let hasInstall = false;
-  try { hasInstall = fs.existsSync(dir); } catch { /* ignore */ }
+  const info = detectInstall();
+  const plan = uninstallPlan(info);
   console.log(P.bold + P.pink + "Désinstaller AuraCode ?" + P.reset);
-  if (hasInstall) console.log("  Supprimé : " + dir + " (programme)");
-  else console.log("  (aucune installation programme trouvée : " + dir + ")");
+  if (info.kind === "npm") {
+    console.log("  Mode détecté : npm global (" + (info.dir || "?") + (info.exists ? "" : ", dossier absent") + ")");
+    console.log("  Supprimé via : npm rm -g auracode (+ nettoyage manuel en secours)");
+  } else if (info.kind === "exe") {
+    console.log("  Mode détecté : exécutable : " + process.execPath);
+    console.log("  Supprimé : le fichier .exe (après fermeture, avec réessais) + dossier vide si vide");
+  } else if (info.kind === "script") {
+    console.log("  Mode détecté : script install.ps1 (" + (info.dir || "?") + (info.exists ? "" : ", dossier absent") + ")");
+  } else {
+    console.log("  Mode détecté : sources de développement — le code ne sera PAS supprimé.");
+    console.log("  Seront nettoyés : entrées PATH AuraCode + (option) données locales.");
+  }
+  plan.removePaths.forEach((p) => console.log("  Supprimé : " + p));
+  plan.rmdirParents.forEach((p) => console.log("  Dossier vidé si vide : " + p));
   console.log("  Retiré du PATH utilisateur (si présent).");
   console.log("  Les conversations serveur sont conservées (compte intact).");
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -1053,18 +1179,29 @@ async function cmdUninstall() {
   if (!(await askYN("Désinstaller le programme ?"))) { console.log("Annulé."); rl.close(); return; }
   const wipeData = await askYN("Supprimer aussi les données locales (~/.auracode : réglages, historique, sessions) ?");
   rl.close();
-  if (process.platform === "win32") {
-    const { spawn } = require("child_process");
-    console.log("Suppression en cours (tu peux fermer ce terminal)...");
-    spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(dir, wipeData)], { detached: true, stdio: "ignore" }).unref();
-  } else {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log("Dossier programme : " + e.message); }
-    console.log("(pense à retirer " + dir + " de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
-    if (wipeData) {
-      try { fs.rmSync(HOME, { recursive: true, force: true }); } catch (e) { console.log("Données : " + e.message); }
-    }
+  if (info.kind === "npm") {
+    const nr = npmRmGlobal();
+    console.log("  " + nr.msg);
   }
-  console.log("Désinstallé. Au revoir !");
+  if (process.platform !== "win32") {
+    // Pas de verrou d'exécutable hors Windows : suppression directe.
+    for (const p of plan.removePaths) { try { fs.rmSync(p, { recursive: true, force: true }); console.log("  OK : " + p); } catch (e) { console.log("  ECHEC : " + p + " (" + e.message + ")"); } }
+    console.log("(pense à retirer les dossiers AuraCode de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
+    if (wipeData) {
+      try { fs.rmSync(HOME, { recursive: true, force: true }); console.log("  Données supprimées."); } catch (e) { console.log("  Données : " + e.message); }
+    }
+    console.log("Désinstallé. Au revoir !");
+    setTimeout(() => process.exit(0), 800);
+    return;
+  }
+  const logFile = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".log");
+  const ps1 = buildUninstallerPs({ pid: process.pid, removePaths: plan.removePaths, rmdirParents: plan.rmdirParents, pathStrip: plan.pathStrip, wipeData, homeDir: HOME, logFile });
+  const file = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".ps1");
+  fs.writeFileSync(file, ps1);
+  console.log("Suppression en cours (détail : " + logFile + ")...");
+  const { spawn } = require("child_process");
+  spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file], { detached: true, stdio: "ignore" }).unref();
+  console.log("Désinstallé (vérifie dans un NOUVEAU terminal : where auracode doit échouer). Au revoir !");
   setTimeout(() => process.exit(0), 800);
 }
 // cli/src/ui.js — affichage terminal : Screen, splash, modales, canvas.
@@ -2656,12 +2793,33 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "uninstall": {
-          screen.sys("Désinstalle le programme + entrée PATH" + (fs.existsSync(getInstallDir()) ? "" : " (dossier introuvable)") + ".");
+          const info = detectInstall();
+          const plan = uninstallPlan(info);
+          screen.sys("Désinstallation (" + info.kind + (info.dir ? " : " + info.dir : "") + ").");
+          plan.removePaths.forEach((p) => screen.sys("  Supprimé : " + p));
           if (!(await screen.confirm("Désinstaller AuraCode ?"))) { screen.sys("Annulé."); return; }
           const wipe = await screen.confirm("Supprimer aussi ~/.auracode (réglages, historique) ?");
+          if (info.kind === "npm") {
+            screen.busy = true; screen.sys("npm rm -g auracode ..."); screen.render();
+            const nr = npmRmGlobal();
+            screen.sys(nr.msg);
+            screen.busy = false; screen.render();
+          }
+          if (process.platform !== "win32") {
+            for (const p of plan.removePaths) { try { fs.rmSync(p, { recursive: true, force: true }); screen.sys("OK : " + p); } catch (e) { screen.sys("ECHEC : " + p); } }
+            screen.sys("(pense à retirer les dossiers AuraCode de ton PATH shell)");
+            if (wipe) { try { fs.rmSync(HOME, { recursive: true, force: true }); screen.sys("Données supprimées."); } catch (e) { screen.sys("Données : " + e.message); } }
+            screen.sys("Désinstallé. Quitte et vérifie dans un nouveau terminal.");
+            screen.render();
+            return;
+          }
+          const logFile = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".log");
+          const ps1 = buildUninstallerPs({ pid: process.pid, removePaths: plan.removePaths, rmdirParents: plan.rmdirParents, pathStrip: plan.pathStrip, wipeData: wipe, homeDir: HOME, logFile });
+          const file = path.join(os.tmpdir(), "auracode-uninstall-" + process.pid + ".ps1");
+          fs.writeFileSync(file, ps1);
           const { spawn } = require("child_process");
-          spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(getInstallDir(), wipe)], { detached: true, stdio: "ignore" }).unref();
-          screen.sys("Désinstallé. Fermeture...");
+          spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file], { detached: true, stdio: "ignore" }).unref();
+          screen.sys("Désinstallé. Fermeture... (log : " + logFile + ")");
           screen.render();
           setTimeout(() => { screen.quit(); setTimeout(() => process.exit(0), 400); }, 600);
           return;
