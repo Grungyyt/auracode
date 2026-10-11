@@ -377,6 +377,7 @@ const COMMANDS = [
   { name: "/skill", desc: "Compétence perso : /skill <nom>", skills: true },
   { name: "/auto", desc: "Règle auto : /auto <outil> <allow|deny|ask>" },
   { name: "/permissions", desc: "Voir les règles auto" },
+  { name: "/admin-stats", desc: "Stats globales (admin)" },
   { name: "/allow", desc: "Toujours autoriser : /allow <outil>" },
   { name: "/deny", desc: "Toujours refuser : /deny <outil>" },
   { name: "/clear", desc: "Effacer l'écran" },

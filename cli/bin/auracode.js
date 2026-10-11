@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.0" };
+const PKG = { version: "1.4.0.0.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -958,6 +958,33 @@ function sessionSpend(messages) {
   } catch { /* ignore */ }
   return t;
 }
+function formatAdminStats(g) {
+  // Met en forme le global de /api/admin/stats (pur, testé).
+  try {
+    const t = (g && g.totals) || {};
+    const n = (x) => typeof x === "number" ? x.toLocaleString("fr-FR") : "—";
+    const L = [];
+    L.push(`📊 Stats globales (${(g && g.days) || "?"} jours) :`);
+    L.push(`  Requêtes : ${n(t.requests)} · Tokens : ${n(t.tokens)} · Erreurs : ${n(t.errors)}`);
+    L.push(`  Comptes actifs : ${n(t.users_active)} / ${n(t.users_total)} · Verrouillés : ${n(t.locked_now)} · Latence moy. : ${n(t.avg_latency_ms)} ms`);
+    const pm = (g && g.per_model) || [];
+    if (pm.length) {
+      L.push("  Par modèle :");
+      pm.slice(0, 8).forEach((m) => L.push(`    ${m.model} : ${n(m.requests)} req · ${n(m.tokens)} tok · ${n(m.errors)} err`));
+    }
+    const pd = (g && g.per_day) || [];
+    if (pd.length) {
+      L.push("  Derniers jours :");
+      pd.slice(0, 7).forEach((d) => L.push(`    ${d.day} : ${n(d.requests)} req · ${n(d.tokens)} tok · ${n(d.users)} comptes`));
+    }
+    const tu = (g && g.top_users) || [];
+    if (tu.length) {
+      L.push("  Top comptes :");
+      tu.slice(0, 10).forEach((u, i) => L.push(`    ${i + 1}. ${u.user_id} : ${n(u.requests)} req · ${n(u.tokens)} tok · ${n(u.images)} img`));
+    }
+    return L.join("\n");
+  } catch { return "Stats illisibles."; }
+}
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
 }
@@ -1682,6 +1709,7 @@ const COMMANDS = [
   { name: "/skill", desc: "Compétence perso : /skill <nom>", skills: true },
   { name: "/auto", desc: "Règle auto : /auto <outil> <allow|deny|ask>" },
   { name: "/permissions", desc: "Voir les règles auto" },
+  { name: "/admin-stats", desc: "Stats globales (admin)" },
   { name: "/allow", desc: "Toujours autoriser : /allow <outil>" },
   { name: "/deny", desc: "Toujours refuser : /deny <outil>" },
   { name: "/clear", desc: "Effacer l'écran" },
@@ -3755,6 +3783,18 @@ async function runTUI(state, updateAvailable) {
           screen.sys("Règles auto (persistées) :\n" + rows.join("\n") + "\n(/bash et /run suivent exec)");
           return;
         }
+        case "admin-stats": {
+          screen.busy = true; screen.render();
+          try {
+            const d = await api("/api/admin/stats", null, state.key, "GET");
+            screen.sys(formatAdminStats(d.global || d));
+          } catch (e) {
+            if (e && e.status === 403) screen.sys("⛔ Réservé aux comptes avec la permission admin.");
+            else screen.sys("Erreur : " + ((e && e.message) || e));
+          }
+          screen.busy = false; screen.render();
+          return;
+        }
         case "conv": {
           let list = [];
           try {
@@ -3923,7 +3963,7 @@ async function main() {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
-  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
+  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
     return;
   }
   purgeStoredSecrets();

@@ -73,6 +73,13 @@ const tests = `
   ok(denyHit(null, "exec") === false, "denyHit: ui nul");
   ok(String(DENY_MSG("exec")).includes("exec"), "DENY_MSG: nomme l'outil");
 
+  // --- formatAdminStats ---
+  const fake = { days: 14, totals: { requests: 100, tokens: 5000, errors: 2, users_active: 3, users_total: 5, locked_now: 1, avg_latency_ms: 42.5 }, per_model: [{ model: "aura-1.1", requests: 90, tokens: 4000, errors: 1 }], per_day: [{ day: "2026-10-11", requests: 10, tokens: 500, users: 2 }], top_users: [{ user_id: "vth:1", requests: 50, tokens: 3000, images: 2 }] };
+  const fs1 = formatAdminStats(fake);
+  ok(fs1.includes("100") && fs1.includes("aura-1.1"), "formatAdminStats: totaux + modele");
+  ok(fs1.includes("vth:1") && fs1.includes("2026-10-11"), "formatAdminStats: top + jours");
+  ok(typeof formatAdminStats(null) === "string", "formatAdminStats: robuste au vide");
+
   // --- auraFile ---
   ok(typeof auraFile() === "string", "auraFile: retourne une string (vide si absent)");
 })();

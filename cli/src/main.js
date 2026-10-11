@@ -1243,6 +1243,18 @@ async function runTUI(state, updateAvailable) {
           screen.sys("Règles auto (persistées) :\n" + rows.join("\n") + "\n(/bash et /run suivent exec)");
           return;
         }
+        case "admin-stats": {
+          screen.busy = true; screen.render();
+          try {
+            const d = await api("/api/admin/stats", null, state.key, "GET");
+            screen.sys(formatAdminStats(d.global || d));
+          } catch (e) {
+            if (e && e.status === 403) screen.sys("⛔ Réservé aux comptes avec la permission admin.");
+            else screen.sys("Erreur : " + ((e && e.message) || e));
+          }
+          screen.busy = false; screen.render();
+          return;
+        }
         case "conv": {
           let list = [];
           try {
@@ -1411,7 +1423,7 @@ async function main() {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
-  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
+  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
     return;
   }
   purgeStoredSecrets();

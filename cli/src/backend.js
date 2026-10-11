@@ -307,6 +307,33 @@ function sessionSpend(messages) {
   } catch { /* ignore */ }
   return t;
 }
+function formatAdminStats(g) {
+  // Met en forme le global de /api/admin/stats (pur, testé).
+  try {
+    const t = (g && g.totals) || {};
+    const n = (x) => typeof x === "number" ? x.toLocaleString("fr-FR") : "—";
+    const L = [];
+    L.push(`📊 Stats globales (${(g && g.days) || "?"} jours) :`);
+    L.push(`  Requêtes : ${n(t.requests)} · Tokens : ${n(t.tokens)} · Erreurs : ${n(t.errors)}`);
+    L.push(`  Comptes actifs : ${n(t.users_active)} / ${n(t.users_total)} · Verrouillés : ${n(t.locked_now)} · Latence moy. : ${n(t.avg_latency_ms)} ms`);
+    const pm = (g && g.per_model) || [];
+    if (pm.length) {
+      L.push("  Par modèle :");
+      pm.slice(0, 8).forEach((m) => L.push(`    ${m.model} : ${n(m.requests)} req · ${n(m.tokens)} tok · ${n(m.errors)} err`));
+    }
+    const pd = (g && g.per_day) || [];
+    if (pd.length) {
+      L.push("  Derniers jours :");
+      pd.slice(0, 7).forEach((d) => L.push(`    ${d.day} : ${n(d.requests)} req · ${n(d.tokens)} tok · ${n(d.users)} comptes`));
+    }
+    const tu = (g && g.top_users) || [];
+    if (tu.length) {
+      L.push("  Top comptes :");
+      tu.slice(0, 10).forEach((u, i) => L.push(`    ${i + 1}. ${u.user_id} : ${n(u.requests)} req · ${n(u.tokens)} tok · ${n(u.images)} img`));
+    }
+    return L.join("\n");
+  } catch { return "Stats illisibles."; }
+}
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
 }
