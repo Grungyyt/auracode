@@ -12,7 +12,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.1" };
+const PKG = { version: "1.3.0.2" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -140,10 +140,22 @@ const cmpVer = (a, b) => {
 const stripAnsi = (s) => String(s || "").replace(/\x1b\[[0-9;]*m/g, "");
 // Pastille clavier façon site : [ Tab ] sur fond beige, texte sombre.
 const kbd = (s) => `\x1b[48;2;222;216;198m\x1b[38;2;38;36;34m ${s} ${P.reset}`;
-// Barre de progression ASCII : vbar(45, 10) -> "████░░░░░░".
+// Barre de progression ASCII en dégradé (menthe -> citron -> corail).
 const vbar = (pct, w = 10) => {
   const f = Math.max(0, Math.min(w, Math.round((Number(pct) || 0) / 100 * w)));
-  return "█".repeat(f) + "░".repeat(w - f);
+  let s = "";
+  for (let i = 0; i < f; i++) {
+    const c = (i / w) * 100;
+    s += (c < 50 ? P.mint : c < 80 ? P.lemon : P.coral) + "█";
+  }
+  return s + P.reset + "░".repeat(w - f);
+};
+// Texte en dégradé pastel : chaque caractère prend la couleur suivante.
+const gradText = (s, cols) => {
+  const C = (cols && cols.length ? cols : [P.pink, P.peach, P.butter, P.mint, P.aqua, P.sky, P.lavender, P.lilac]);
+  const chars = [...String(s || "")];
+  if (!chars.length) return "";
+  return chars.map((ch, i) => C[i % C.length] + ch).join("") + P.reset;
 };
 const truncVis = (s, w) => {
   let vis = 0, i = 0, out = "";

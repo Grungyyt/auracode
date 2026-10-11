@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.1" };
+const PKG = { version: "1.3.0.2" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -147,10 +147,22 @@ const cmpVer = (a, b) => {
 const stripAnsi = (s) => String(s || "").replace(/\x1b\[[0-9;]*m/g, "");
 // Pastille clavier façon site : [ Tab ] sur fond beige, texte sombre.
 const kbd = (s) => `\x1b[48;2;222;216;198m\x1b[38;2;38;36;34m ${s} ${P.reset}`;
-// Barre de progression ASCII : vbar(45, 10) -> "████░░░░░░".
+// Barre de progression ASCII en dégradé (menthe -> citron -> corail).
 const vbar = (pct, w = 10) => {
   const f = Math.max(0, Math.min(w, Math.round((Number(pct) || 0) / 100 * w)));
-  return "█".repeat(f) + "░".repeat(w - f);
+  let s = "";
+  for (let i = 0; i < f; i++) {
+    const c = (i / w) * 100;
+    s += (c < 50 ? P.mint : c < 80 ? P.lemon : P.coral) + "█";
+  }
+  return s + P.reset + "░".repeat(w - f);
+};
+// Texte en dégradé pastel : chaque caractère prend la couleur suivante.
+const gradText = (s, cols) => {
+  const C = (cols && cols.length ? cols : [P.pink, P.peach, P.butter, P.mint, P.aqua, P.sky, P.lavender, P.lilac]);
+  const chars = [...String(s || "")];
+  if (!chars.length) return "";
+  return chars.map((ch, i) => C[i % C.length] + ch).join("") + P.reset;
 };
 const truncVis = (s, w) => {
   let vis = 0, i = 0, out = "";
@@ -1167,7 +1179,10 @@ async function splash() {
     return pad + (color ? P[color] + text + P.reset : text);
   };
   const block = [
-    ...ART_LINES.map((ln, i) => center(ln, ART_COLORS[i % ART_COLORS.length])),
+    ...ART_LINES.map((ln) => {
+      const pad = " ".repeat(Math.max(0, Math.floor((W - ln.length) / 2)));
+      return pad + gradText(ln);
+    }),
     center("L'IA qui pilote ton PC — By VTH Group", "sky"),
     "",
     center(`v${PKG.version}`, "dim"),
@@ -1538,6 +1553,7 @@ class Screen {
   }
 
   tool(name, ok, ms, output) {
+    this.lastTool = name;
     this.messages.push({ role: "tool", name: String(name), ok: !!ok, ms: ms == null ? null : ms, output: String(output || "").slice(0, 2000), time: timeStr() });
     if (this.messages.length > 300) this.messages.splice(0, this.messages.length - 300);
     this.render();
@@ -1727,6 +1743,16 @@ class Screen {
     const lines = [];
     const push = (vis, out) => lines.push({ vis, out: out === undefined ? vis : out });
     for (const m of this.messages) {
+      if (m.role === "art") {
+        for (const wl of String(m.text || "").split("\n")) {
+          const t = truncVis(wl, W - 2);
+          const plain = stripAnsi(t);
+          const pad = " ".repeat(Math.max(0, Math.floor((W - plain.length) / 2)));
+          push(pad + plain, pad + gradText(plain));
+        }
+        push("", "");
+        continue;
+      }
       if (m.role === "system") {
         for (const wl of wrapText("· " + m.text, Math.max(20, W - 8))) {
           const pad = " ".repeat(Math.max(0, Math.floor((W - wl.length) / 2)));
@@ -1829,7 +1855,7 @@ class Screen {
 
     if (!this.messages.length && !this.modal) {
       const wRow = [
-        P.bold + P.pink + "◤  A U R A C O D E" + P.reset,
+        P.bold + gradText("◤  A U R A C O D E"),
         P.sky + "L'IA qui pilote ton PC" + P.reset,
         "",
         `Tape ton message + ${kbd("Entrée")}  •  ${kbd("/")} commandes  •  ${kbd("Ctrl+P")} palette`,
@@ -1875,20 +1901,31 @@ class Screen {
       const mLeft = " ".repeat(Math.max(0, Math.floor((W - mw) / 2)));
       mRows.forEach((r, i) => {
         const idx = mStart + i;
-        if (idx < visible.length) visible[idx] = { vis: "", out: mLeft + r };
+        if (idx < visible.length) visible[idx] = { vis: "", out: mLeft + r + P.dim + "░░" + P.reset };
       });
+      if (mStart + mRows.length < visible.length) {
+        visible[mStart + mRows.length] = { vis: "", out: mLeft + " " + P.dim + "░".repeat(mw) + P.reset };
+      }
     }
 
+    const HB = "\x1b[48;2;38;36;34m";
+    const HF = "\x1b[38;2;216;210;196m";
     const sid8 = (getSessionId() || "").slice(0, 8);
-    const mid = `${sid8 ? sid8 + "  " : ""}${this.state.model} • ${this.state.effort}`;
-    const barV = this.quotaPct > 0 ? vbar(this.quotaPct, 8) : "";
-    const rawRplain = (this.quotaText || "") + (barV ? " " + barV : "");
-    let rawL = `◤ auracode  ${mid}`;
-    if (rawL.length > W) rawL = rawL.slice(0, W);
-    const pad = " ".repeat(Math.max(1, W - rawL.length - rawRplain.length));
-    const hTitle = P.bold + P.pink + "◤ auracode" + P.reset;
-    const hMid = P.lavender + rawL.slice("◤ auracode".length) + P.reset;
-    const header = hTitle + hMid + pad + P.mint + (this.quotaText || "") + P.reset + (barV ? " " + P.lavender + barV + P.reset : "");
+    let mid = `${sid8 ? sid8 + "  " : ""}${this.state.model} • ${this.state.effort}`;
+    const barV = this.quotaPct > 0 ? vbar(this.quotaPct, 8).split(P.reset).join(P.reset + HB + HF) : "";
+    let right = ((this.quotaText || "") + (barV ? " " + stripAnsi(barV) : "")).trim();
+    let maxMid = W - 11 - 3 - right.length - 1;
+    if (maxMid < 8) { right = this.quotaText || ""; maxMid = W - 11 - 3 - right.length - 1; }
+    if (maxMid < 8) { right = ""; maxMid = W - 11 - 3 - 1; }
+    mid = mid.slice(0, Math.max(8, maxMid));
+    const padN = Math.max(0, W - 11 - 3 - mid.length - right.length);
+    let header =
+      HB + HF + " " + P.bold + P.pink + "◤ auracode" + P.reset + HB + HF + " " + P.dim + "│" + P.reset + HB + HF + " " +
+      P.lavender + mid + P.reset + HB + HF +
+      " ".repeat(padN) +
+      P.mint + (this.quotaText || "") + P.reset + HB + HF + (barV ? " " + barV : "");
+    const hv = stripAnsi(header).length;
+    header = (hv < W ? header + HB + HF + " ".repeat(W - hv) : truncVis(header, W)) + P.reset;
 
     let out = "\x1b[?25l\x1b[H";
     out += header + "\x1b[K\n";
@@ -1944,7 +1981,7 @@ class Screen {
     if (this.updateAvailable) {
       sL = `↓ MAJ ${this.updateAvailable} • /update`;
     } else if (this.busy && this.thinkSec !== null && this.thinkSec !== undefined) {
-      sL = `Aura réfléchit... ${this.thinkSec.toFixed(0)}s (Échap = stop)`;
+      sL = `✻ Réflexion… ${this.thinkSec.toFixed(0)}s${this.lastTool ? ` · ${this.lastTool}` : ""} (Échap = stop)`;
     } else if (this.busy) {
       sL = "Travail en cours... (Échap = stop)";
     } else if (this.typeTimer) {
@@ -1974,7 +2011,7 @@ class Screen {
     if (sR) sLine += " ".repeat(Math.max(1, W - stripAnsi(sL).length - stripAnsi(sR).length)) + sR;
     if (stripAnsi(sLine).length > W) sLine = truncVis(sLine, W);
     const thinking = this.busy && this.thinkSec !== null && this.thinkSec !== undefined;
-    out += (thinking ? P.lavender : P.dim) + sLine + P.reset;
+    out += HB + (thinking ? P.lavender : HF) + sLine + P.reset;
     process.stdout.write(out);
 
     if (cursorCol >= 0) {
@@ -2800,8 +2837,10 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "banner": {
-          ART_LINES.forEach((ln) => screen.sys("  " + ln.trim()));
+          screen.messages.push({ role: "art", text: ART_LINES.join("\n"), time: timeStr() });
+          if (screen.messages.length > 300) screen.messages.splice(0, screen.messages.length - 300);
           screen.sys(`v${PKG.version} — Aura by VTH Group`);
+          screen.render();
           return;
         }
         case "de": {

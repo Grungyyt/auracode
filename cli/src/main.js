@@ -584,8 +584,10 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "banner": {
-          ART_LINES.forEach((ln) => screen.sys("  " + ln.trim()));
+          screen.messages.push({ role: "art", text: ART_LINES.join("\n"), time: timeStr() });
+          if (screen.messages.length > 300) screen.messages.splice(0, screen.messages.length - 300);
           screen.sys(`v${PKG.version} — Aura by VTH Group`);
+          screen.render();
           return;
         }
         case "de": {
