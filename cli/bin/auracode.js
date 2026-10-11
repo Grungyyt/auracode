@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.2" };
+const PKG = { version: "1.3.0.3" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -712,7 +712,8 @@ async function selfUpdate(quiet = false) {
     const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
     if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
     const dir = path.dirname(__filename);
-    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
+    const rootDir = path.join(dir, "..");
+    fs.writeFileSync(path.join(rootDir, "package.json"), JSON.stringify(rp, null, 2));
     fs.writeFileSync(__filename, js);
     say("Mis à jour vers " + rp.version + ". Quitte (Ctrl+C) et relance auracode.");
   } catch (e) {
@@ -2275,7 +2276,7 @@ async function runTUI(state, updateAvailable) {
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
       const saveCfg = () => saveJson(CONFIG_FILE, {
-        apiKey: state.key, model: state.model, effort: state.effort,
+        model: state.model, effort: state.effort,
         lang: state.lang, theme: state.theme,
       });
       const pickModal = (title, options, current, apply) => {

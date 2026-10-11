@@ -22,7 +22,7 @@ async function runTUI(state, updateAvailable) {
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
       const saveCfg = () => saveJson(CONFIG_FILE, {
-        apiKey: state.key, model: state.model, effort: state.effort,
+        model: state.model, effort: state.effort,
         lang: state.lang, theme: state.theme,
       });
       const pickModal = (title, options, current, apply) => {

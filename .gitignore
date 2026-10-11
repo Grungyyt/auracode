@@ -1,3 +1,11 @@
 node_modules/
 cli/dist/
 cli/sea-config.json
+# Secrets : jamais dans git (repo PUBLIC)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json

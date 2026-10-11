@@ -165,7 +165,8 @@ async function selfUpdate(quiet = false) {
     const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
     if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
     const dir = path.dirname(__filename);
-    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
+    const rootDir = path.join(dir, "..");
+    fs.writeFileSync(path.join(rootDir, "package.json"), JSON.stringify(rp, null, 2));
     fs.writeFileSync(__filename, js);
     say("Mis à jour vers " + rp.version + ". Quitte (Ctrl+C) et relance auracode.");
   } catch (e) {
