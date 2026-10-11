@@ -78,7 +78,7 @@ async function refreshVth() {
   return refreshP;
 }
 // IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
-const PKG = { version: "1.2.1.02" };
+const PKG = { version: "1.2.1.03" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -1171,6 +1171,7 @@ const COMMANDS = [
   { name: "/doctor", desc: "Diagnostic connexion / modèles" },
   { name: "/quota", desc: "Afficher ton quota global" },
   { name: "/image", desc: "Générer une image : /image <texte>" },
+  { name: "/image13", desc: "Image flagship : /image13 <texte>" },
   { name: "/bash", desc: "Commande shell (confirmation)" },
   { name: "/read", desc: "Lire un fichier : /read <chemin>", files: true },
   { name: "/ls", desc: "Lister un dossier : /ls [dossier]", files: true },
@@ -2059,6 +2060,33 @@ async function runTUI(state, updateAvailable) {
             screen.assistant(`![image](${d.image_url})`);
             await screen.refreshQuota();
           } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false;
+          screen.render();
+          return;
+        }
+        case "image13": {
+          if (!arg) { screen.sys("Usage : /image13 <description>  (Aura 1.3 Image, grand format)"); return; }
+          if (aura13Locked()) {
+            screen.sys(`🔒 Aura 1.3 Image dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
+            openBrowser(AURA13_WAIT_URL);
+            screen.render();
+            return;
+          }
+          let sid = getSessionId();
+          screen.busy = true;
+          try {
+            if (!sid) sid = await newSession(state.key, state.model);
+            screen.sys("Génération de l'image 1.3 (grand format, coût x3)...");
+            const d = await api("/api/image", { prompt: arg, session_id: sid, model: "aura-1.3-image" }, state.key);
+            screen.assistant(`![image](${d.image_url})`);
+            await screen.refreshQuota();
+          } catch (e) {
+            const ed = e.data || {};
+            if (/aura 1\.3/i.test(String(ed.error || ""))) {
+              screen.sys(`🔒 Aura 1.3 Image dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
+              openBrowser(AURA13_WAIT_URL);
+            } else screen.sys("Erreur : " + e.message);
+          }
           screen.busy = false;
           screen.render();
           return;
