@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.4" };
+const PKG = { version: "1.3.0.6" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -1208,7 +1208,7 @@ async function cmdUninstall() {
 // Bundlé : symboles partagés fournis par shared.js (même portée finale).
 
 function adLine(W) {
-  const txt = aura13Locked() ? `✨ Aura 1.3 dans ${aura13Countdown()} — ${AURA13_LAUNCH_LABEL}` : "✨ Aura 1.3 est là — /model aura-1.3 !";
+  const txt = aura13Locked() ? `✨ Aura 1.3 by VTH Groupdans ${aura13Countdown()} — ${AURA13_LAUNCH_LABEL}` : "✨ Aura 1.3 by VTH Group est là — /model aura-1.3 !";
   const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
   return pad + P.bold + P.butter + txt + P.reset;
 }
@@ -1321,7 +1321,7 @@ async function splash() {
       const pad = " ".repeat(Math.max(0, Math.floor((W - ln.length) / 2)));
       return pad + gradText(ln);
     }),
-    center("L'IA qui pilote ton PC — By VTH Group", "sky"),
+    center("L'IA qui pilote (vraiment) ton PC — By VTH Group", "sky"),
     "",
     center(`v${PKG.version}`, "dim"),
     center(`build ${buildId()}`, "dim"),
