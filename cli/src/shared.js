@@ -12,7 +12,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.2.1.03" };
+const PKG = { version: "1.3.0.0" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -137,6 +137,13 @@ const cmpVer = (a, b) => {
 
 // ---------- Helpers d'affichage (style opencode) ----------
 const stripAnsi = (s) => String(s || "").replace(/\x1b\[[0-9;]*m/g, "");
+// Pastille clavier façon site : [ Tab ] sur fond beige, texte sombre.
+const kbd = (s) => `\x1b[48;2;222;216;198m\x1b[38;2;38;36;34m ${s} ${P.reset}`;
+// Barre de progression ASCII : vbar(45, 10) -> "████░░░░░░".
+const vbar = (pct, w = 10) => {
+  const f = Math.max(0, Math.min(w, Math.round((Number(pct) || 0) / 100 * w)));
+  return "█".repeat(f) + "░".repeat(w - f);
+};
 const truncVis = (s, w) => {
   let vis = 0, i = 0, out = "";
   const src = String(s || "");

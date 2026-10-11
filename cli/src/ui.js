@@ -88,6 +88,15 @@ async function runFireworks(screen, seconds = 7, title = "🎆 Aura 1.3 est là 
   }
 }
 
+const TIPS = [
+  "Astuce : / + Tab complète les commandes",
+  "Astuce : @fichier joint un fichier au message",
+  "Astuce : Ctrl+P palette • F1 aide • F2 sessions",
+  "Astuce : /timer 25m + /todo pour rester focus",
+  "Astuce : Échap interrompt une réponse en cours",
+  "Astuce : /export html sauve la conversation",
+];
+
 async function splash() {
   // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
   // Retourne : version dispo (string), null (à jour), undefined (hors ligne).
@@ -103,10 +112,11 @@ async function splash() {
   };
   const block = [
     ...ART_LINES.map((ln, i) => center(ln, ART_COLORS[i % ART_COLORS.length])),
-    center("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky"),
+    center("L'IA qui pilote ton PC — By VTH Group", "sky"),
     "",
     center(`v${PKG.version}`, "dim"),
     center(`build ${buildId()}`, "dim"),
+    center(TIPS[Math.floor(Math.random() * TIPS.length)], "dim"),
     "",
   ];
   block.splice(block.length - 1, 0, brandLine(W));
@@ -376,6 +386,7 @@ class Screen {
     this.busy = false;
     this.thinkSec = null;
     this.quotaText = "";
+    this.quotaPct = 0;
     this.hist = loadJson(HIST_FILE, []);
     this.histIdx = -1;
     this.draft = "";
@@ -574,7 +585,8 @@ class Screen {
       const s = this.sessionsCache[i] || {};
       const id = String(s.session_id || "?").slice(0, 8);
       const mark = s.session_id && s.session_id === cur ? "●" : " ";
-      rows.push(`${mark}${i + 1} ${id} ${s.model || ""}`.slice(0, sbW));
+      const pct = Math.max(0, Math.min(100, Number(s.usage_percent) || 0));
+      rows.push(`${mark}${i + 1} ${id} ${vbar(pct, 5)} ${String(s.model || "").slice(0, 8)}`.slice(0, sbW));
     }
     while (rows.length < h - 1) rows.push("");
     rows.push("Alt+n • F2 fermer".slice(0, sbW));
@@ -628,10 +640,11 @@ class Screen {
   async refreshQuota() {
     try {
       const sid = getSessionId();
-      if (!sid) { this.quotaText = ""; return; }
+      if (!sid) { this.quotaText = ""; this.quotaPct = 0; return; }
       const q = await api("/api/quota/" + sid, null, this.state.key, "GET");
       this.quotaText = `Tokens ${q.tokens_remaining}/${q.token_limit}`;
-    } catch { this.quotaText = ""; }
+      this.quotaPct = Math.max(0, Math.min(100, Number(q.usage_percent) || 0));
+    } catch { this.quotaText = ""; this.quotaPct = 0; }
   }
 
   render() {
@@ -661,8 +674,9 @@ class Screen {
       if (m.role === "tool") {
         const icol = m.ok ? P.mint : P.pink;
         const icon = m.ok ? "✓" : "✗";
-        push("", ` ${icol}⚙ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""}${P.reset}`);
-        const outs = String(m.output || "").split("\n").slice(0, 6);
+        const nOut = String(m.output || "").split("\n").length;
+        push("", ` ${icol}⚙ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""} ${P.dim}· ${nOut}l${P.reset}`);
+        const outs = String(m.output || "").split("\n").slice(0, 12);
         for (const ol of outs) {
           const t = ol.slice(0, Math.max(20, W - 10));
           push("  " + t, P.dim + "  " + t + P.reset);
@@ -708,6 +722,25 @@ class Screen {
     const visible = lines.slice(start, start + viewH);
     while (visible.length < viewH) visible.unshift(null);
 
+    if (!this.messages.length && !this.modal) {
+      const wRow = [
+        P.bold + P.pink + "◤  A U R A C O D E" + P.reset,
+        P.sky + "L'IA qui pilote ton PC" + P.reset,
+        "",
+        `Tape ton message + ${kbd("Entrée")}  •  ${kbd("/")} commandes  •  ${kbd("Ctrl+P")} palette`,
+        `${kbd("@fichier")} joint un fichier  •  ${kbd("F1")} aide  •  ${kbd("F2")} sessions`,
+        "",
+        P.dim + `${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}` + P.reset,
+      ];
+      const ws = Math.max(0, Math.floor((viewH - wRow.length) / 2));
+      wRow.forEach((r, i) => {
+        const plain = stripAnsi(r);
+        const left = " ".repeat(Math.max(0, Math.floor((W - plain.length) / 2)));
+        const idx = ws + i;
+        if (idx < visible.length) visible[idx] = { vis: "", out: left + r };
+      });
+    }
+
     if (this.modal) {
       const mw = Math.min(62, W - 4);
       const iw = mw - 4;
@@ -724,9 +757,11 @@ class Screen {
           : P.dim + txt + P.reset;
         mRows.push(P.dim + "│ " + P.reset + colored + " ".repeat(Math.max(0, iw - Math.min(txt.length, iw))) + P.dim + " │" + P.reset);
       });
-      const foot = "↑↓ choisir • Entrée valider • Échap fermer";
+      const foot = `${kbd("↑↓")} choisir   ${kbd("Entrée")} valider   ${kbd("Échap")} fermer`;
+      const footPlain = stripAnsi(foot);
+      const footPad = Math.max(0, Math.floor((iw - footPlain.length) / 2));
       mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
-      mRows.push(P.dim + "│ " + P.reset + P.dim + fit(foot) + P.reset + P.dim + " │" + P.reset);
+      mRows.push(P.dim + "│ " + P.reset + " ".repeat(footPad) + foot + " ".repeat(Math.max(0, iw - footPlain.length - footPad)) + P.dim + " │" + P.reset);
       mRows.push(P.dim + "╰" + "─".repeat(mw - 2) + "╯" + P.reset);
       const mStart = Math.max(0, Math.floor((viewH - mRows.length) / 2));
       const mLeft = " ".repeat(Math.max(0, Math.floor((W - mw) / 2)));
@@ -737,24 +772,32 @@ class Screen {
     }
 
     const sid8 = (getSessionId() || "").slice(0, 8);
-    let rawL = `◤ auracode  ${sid8 ? sid8 + "  " : ""}${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}`;
+    const mid = `${sid8 ? sid8 + "  " : ""}${this.state.model} • ${this.state.effort}`;
+    const barV = this.quotaPct > 0 ? vbar(this.quotaPct, 8) : "";
+    const rawRplain = (this.quotaText || "") + (barV ? " " + barV : "");
+    let rawL = `◤ auracode  ${mid}`;
     if (rawL.length > W) rawL = rawL.slice(0, W);
-    const rawR = this.quotaText;
-    const pad = " ".repeat(Math.max(1, W - rawL.length - rawR.length));
+    const pad = " ".repeat(Math.max(1, W - rawL.length - rawRplain.length));
     const hTitle = P.bold + P.pink + "◤ auracode" + P.reset;
     const hMid = P.lavender + rawL.slice("◤ auracode".length) + P.reset;
-    const header = hTitle + hMid + pad + P.mint + rawR + P.reset;
+    const header = hTitle + hMid + pad + P.mint + (this.quotaText || "") + P.reset + (barV ? " " + P.lavender + barV + P.reset : "");
 
     let out = "\x1b[?25l\x1b[H";
     out += header + "\x1b[K\n";
     const sb = !this.modal ? (this.sidebar ? this.sidebarRows(viewH) : this.account ? this.accountRows(viewH) : null) : null;
     const msgW = sb ? W - sb.sbW - 1 : W;
+    const showBar = !sb && !this.modal && maxScroll > 0;
+    const thumbAt = showBar ? Math.round((1 - this.scroll / Math.max(1, maxScroll)) * (viewH - 1)) : -1;
     visible.forEach((l, i) => {
       let row = l ? l.out : "";
       if (sb) {
         const cut = truncVis(row, msgW);
         const vlen = Math.min(stripAnsi(row).length, msgW);
         row = cut + " ".repeat(Math.max(0, msgW - vlen)) + P.dim + "▏" + P.reset + (sb.rows[i] || "");
+      } else if (showBar) {
+        const cut = truncVis(row, W - 1);
+        const vlen = Math.min(stripAnsi(row).length, W - 1);
+        row = cut + " ".repeat(Math.max(0, W - 1 - vlen)) + (i === thumbAt ? P.lavender + "█" + P.reset : P.dim + "│" + P.reset);
       }
       out += row + "\x1b[K\n";
     });
@@ -765,12 +808,17 @@ class Screen {
 
     let cursorCol = -1, cursorRowOff = 0;
     if (this.confirmState) {
-      const q = (`? ${this.confirmState.q} [o/N]`).slice(0, W - 4);
-      out += "│ " + P.lemon + q + P.reset + " ".repeat(Math.max(0, W - 4 - q.length)) + " │" + "\x1b[K\n";
+      const q = (`? ${this.confirmState.q}`).slice(0, W - 12);
+      out += "│ " + P.lemon + q + P.reset + " " + kbd("o") + " " + kbd("N") + " ".repeat(Math.max(0, W - 4 - q.length - 8)) + " │" + "\x1b[K\n";
     } else {
-      let boxTitle = "─ Écris ton message… (Ctrl+J = ligne, @fichier) ";
-      if (inR.rows.length > inR.shown.length) boxTitle = `─ ↑↓ ${inR.start + 1}-${inR.start + inR.shown.length}/${inR.rows.length} ─ `;
-      out += P.dim + "╭" + boxTitle + "─".repeat(Math.max(0, W - 2 - boxTitle.length)) + "╮" + P.reset + "\x1b[K\n";
+      const inLen = this.input.length;
+      let boxTitle = `─ Écris ton message… (${inLen}) ── Ctrl+J ligne, @fichier `;
+      let boxTitleOut = `${P.dim}─ Écris ton message… ${P.reset + P.lavender}(${inLen})${P.reset + P.dim} ── Ctrl+J ligne, @fichier `;
+      if (inR.rows.length > inR.shown.length) {
+        boxTitle = `─ ↑↓ ${inR.start + 1}-${inR.start + inR.shown.length}/${inR.rows.length} ─ `;
+        boxTitleOut = P.dim + boxTitle;
+      }
+      out += P.dim + "╭" + boxTitleOut + "─".repeat(Math.max(0, W - 2 - boxTitle.length)) + "╮" + P.reset + "\x1b[K\n";
       inR.shown.forEach((r, i) => {
         const gi = inR.start + i;
         const pre = gi === 0 ? "> " : "  ";
@@ -789,6 +837,8 @@ class Screen {
       sL = `Aura réfléchit... ${this.thinkSec.toFixed(0)}s (Échap = stop)`;
     } else if (this.busy) {
       sL = "Travail en cours... (Échap = stop)";
+    } else if (this.typeTimer) {
+      sL = "Aura écrit" + "●".repeat(1 + (Math.floor(Date.now() / 400) % 3));
     } else {
       sL = `${this.state.model} • ${this.state.effort} • ${this.state.lang || "fr"}`;
     }
@@ -805,8 +855,8 @@ class Screen {
     if (this.scroll > 0) sR += (sR ? " • " : "") + "PgDn : bas";
     if (this.updateAvailable && !this.busy) sR += (sR ? " • " : "") + "Tape /update";
     let sLine = sL;
-    if (sR) sLine += " ".repeat(Math.max(1, W - sL.length - sR.length)) + sR;
-    if (sLine.length > W) sLine = sLine.slice(0, W);
+    if (sR) sLine += " ".repeat(Math.max(1, W - stripAnsi(sL).length - stripAnsi(sR).length)) + sR;
+    if (stripAnsi(sLine).length > W) sLine = truncVis(sLine, W);
     const thinking = this.busy && this.thinkSec !== null && this.thinkSec !== undefined;
     out += (thinking ? P.lavender : P.dim) + sLine + P.reset;
     process.stdout.write(out);
