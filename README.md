@@ -53,7 +53,8 @@ auracode
 
 ## Développement
 
-- `cli/` : le terminal (Node 18+, zéro dépendance).
+- `cli/src/` : le vrai code — `shared.js` (commun), `backend.js` (API/agent/outils), `ui.js` (affichage terminal), `main.js` (commandes). Zéro dépendance, Node 18+.
+- `cli/bin/auracode.js` : FICHIER GÉNÉRÉ (bundle) — ne pas éditer, lancer `npm run build` dans `cli/` après chaque modif de `src/`.
 - `web/` : la landing page (Vercel).
 - `scripts/build-exe.js` : construit `auracode.exe` via Node SEA (optionnel).
 - Un tag `git tag vX.Y.Z && git push --tags` déclenche le build du `.exe` et la release GitHub automatiquement.

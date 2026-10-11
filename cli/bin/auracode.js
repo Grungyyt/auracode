@@ -1,83 +1,24 @@
 #!/usr/bin/env node
 /* AuraCode — agent terminal connecté au cloud VTH (api.ia.vth-mc.fr).
  * Zéro dépendance, Node 18+. Stockage privé : sessions sur ton VPS.
+ * FICHIER GÉNÉRÉ — ne pas éditer. Sources : cli/src/shared.js (commun),
+ * backend.js (API/agent/outils/auth), ui.js (affichage terminal), main.js (commandes).
+ * Régénérer : node scripts/bundle.js (ou `npm run build` dans cli/).
  */
+// cli/src/shared.js — constantes, helpers purs et petits moteurs (aucune dépendance métier).
+// Bundlé dans cli/bin/auracode.js via `node scripts/bundle.js`.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
-const { exec, execSync } = require("child_process");
 const crypto = require("crypto");
+const { exec, execSync } = require("child_process");
 
-const API = process.env.AURA_API || "https://api.ia.vth-mc.fr";
 const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-// ---------- Auth VTH (OAuth service AuraCode) ----------
-// La CLÉ PRIVÉE ne vit QUE sur le VPS (jamais dans ce fichier public).
-// Le CLI obtient access/refresh via le VPS (/api/auth/exchange).
-const VTH_FILE = path.join(HOME, "vth.json"); // historique : plus jamais écrit (mémoire seule)
-const AURA_PUBLIC_ID = process.env.AURA_PUBLIC_ID || "N8FjCur0OABUofZBIwBibnEMTN9RrA4F";
-const AURA_AUTH_BASE = (process.env.AURA_AUTH_BASE || "https://auth.vth-mc.fr").replace(/\/$/, "");
-const AURA_LOGIN_PORT = parseInt(process.env.AURA_LOGIN_PORT || "3000", 10) || 3000;
-let memVthStore = null;
-const loadVth = () => memVthStore || {};
-const saveVth = (o) => { memVthStore = o; };
-const clearVth = () => { memVthStore = null; };
-let memApiKey = null;
-let vthCurrent = null; // access token en cours (évite les doubles refresh)
-const isVthToken = (k) => typeof k === "string" && k.startsWith("vth-acc.");
-// State CSRF 32 chars (doc VTH : lettres, chiffres, - et _).
-const newState32 = () => {
-  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  const b = crypto.randomBytes(32);
-  let s = "";
-  for (let i = 0; i < b.length && s.length < 32; i++) s += A[b[i] % 64];
-  if (s.length < 32) throw new Error("state trop court");
-  return s;
-};
-const vthAuthorizeUrl = (state) =>
-  `${AURA_AUTH_BASE}/authorize?public_token=${encodeURIComponent(AURA_PUBLIC_ID)}&state=${encodeURIComponent(state)}`;
-function openBrowser(url) {
-  try {
-    const plat = process.platform;
-    const cmd = plat === "win32" ? `start "" "${url}"` : plat === "darwin" ? `open "${url}"` : `xdg-open "${url}"`;
-    exec(cmd, { timeout: 10000 }, () => {});
-  } catch { /* ignore */ }
-}
-// Résout un access token : mémoire -> fichier -> refresh via VPS.
-async function vthAccess() {
-  if (vthCurrent) return vthCurrent;
-  const v = loadVth();
-  if (v && v.access_token) { vthCurrent = v.access_token; return vthCurrent; }
-  if (v && v.refresh_token) return refreshVth();
-  return null;
-}
-let refreshP = null;
-async function refreshVth() {
-  if (refreshP) return refreshP;
-  refreshP = (async () => {
-    try {
-      const v = loadVth();
-      if (!v || !v.refresh_token) return null;
-      const r = await fetch(API + "/api/auth/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: v.refresh_token }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!j.access_token) { clearVth(); vthCurrent = null; return null; }
-      saveVth({ access_token: j.access_token, refresh_token: j.refresh_token || v.refresh_token, obtained_at: Date.now() });
-      vthCurrent = j.access_token;
-      return vthCurrent;
-    } catch { return null; }
-    finally { refreshP = null; }
-  })();
-  return refreshP;
-}
-// IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
 const PKG = { version: "1.2.1.03" };
 
 const ART_LINES = [
@@ -135,23 +76,6 @@ function saveJson(p, obj) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(obj, null, 2));
 }
-const getKey = () => (memApiKey || "").trim();
-
-// Migration sécurité : les tokens ne sont plus stockés sur disque.
-// Purge au démarrage (une fois) : clé config + vth.json oubliés.
-function purgeStoredSecrets() {
-  let wiped = false;
-  try {
-    const cfg = loadJson(CONFIG_FILE, {});
-    if (cfg.apiKey) { delete cfg.apiKey; saveJson(CONFIG_FILE, cfg); wiped = true; }
-  } catch { /* ignore */ }
-  try {
-    if (fs.existsSync(VTH_FILE)) { fs.unlinkSync(VTH_FILE); wiped = true; }
-  } catch { /* ignore */ }
-  if (wiped) console.log("Anciens tokens locaux supprimés (désormais : mémoire seule, login à chaque lancement).");
-}
-
-// Dossier d'installation à désinstaller (jamais le dossier projet courant).
 function getInstallDir() {
   if (process.platform === "win32") {
     const base = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
@@ -195,18 +119,6 @@ const aura13Countdown = () => {
   const ss = String(s % 60).padStart(2, "0");
   return `${d}j ${hh}:${mm}:${ss}`;
 };
-function adLine(W) {
-  const txt = aura13Locked() ? `✨ Aura 1.3 dans ${aura13Countdown()} — ${AURA13_LAUNCH_LABEL}` : "✨ Aura 1.3 est là — /model aura-1.3 !";
-  const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
-  return pad + P.bold + P.butter + txt + P.reset;
-}
-
-function brandLine(W) {
-  const plain = "Aura by VTH Group";
-  const pad = " ".repeat(Math.max(0, Math.floor((W - plain.length) / 2)));
-  return pad + P.bold + P.pink + "Aura" + P.reset + P.dim + " by " + P.reset + P.bold + P.sky + "VTH Group" + P.reset;
-}
-
 // ID unique de build : hash court du fichier exécuté (marche en mode script comme .exe,
 // sans maintenance manuelle). Chaque mise à jour a donc son identifiant vérifiable.
 let BUILD_ID = null;
@@ -219,148 +131,6 @@ const buildId = () => {
 };
 
 // 🎆 Feux d'artifice latéraux : fusées + explosion + retombées. Touche = passer.
-const PARTY_COLS = () => [P.pink, P.butter, P.mint, P.aqua, P.lavender, P.lilac, P.lemon, P.coral];
-const PARTY_CH = ["*", "+", "✦", "·", "•", "×"];
-const explodeRocket = (r, cols, chs) => {
-  const sparks = [];
-  const n = 8 + Math.floor(Math.random() * 7);
-  const col = cols[Math.floor(Math.random() * cols.length)];
-  for (let i = 0; i < n; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const sp = 0.3 + Math.random() * 0.8;
-    sparks.push({ x: r.x, y: r.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.2, life: 8 + Math.floor(Math.random() * 9), col, ch: chs[Math.floor(Math.random() * chs.length)] });
-  }
-  return sparks;
-};
-async function runFireworks(screen, seconds = 7, title = "🎆 Aura 1.3 est là ! 🎆") {
-  if (!process.stdout.isTTY) return;
-  const W = process.stdout.columns || 80, H = process.stdout.rows || 24;
-  const cols = PARTY_COLS(), chs = PARTY_CH;
-  let rockets = [], sparks = [];
-  let stopped = false;
-  let cleanupKeys = null;
-  if (screen) {
-    screen.celebrating = true;
-  } else if (process.stdin.isTTY) {
-    try {
-      readline.emitKeypressEvents(process.stdin);
-      process.stdin.setRawMode(true);
-      process.stdin.resume();
-      const onKey = () => { stopped = true; };
-      process.stdin.on("keypress", onKey);
-      cleanupKeys = () => {
-        try { process.stdin.removeListener("keypress", onKey); } catch { /* ignore */ }
-        try { if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* ignore */ }
-        try { process.stdin.pause(); } catch { /* ignore */ }
-      };
-    } catch { /* ignore */ }
-  }
-  const t0 = Date.now();
-  process.stdout.write("\x1b[?25l");
-  try {
-    while (!stopped && !(screen && !screen.celebrating) && Date.now() - t0 < seconds * 1000) {
-      if (rockets.length < 3 && Math.random() < 0.35) {
-        const left = Math.random() < 0.5;
-        rockets.push({ x: left ? 1 + Math.random() * 3 : W - 4 + Math.random() * 3, y: H - 1, vy: -(0.7 + Math.random() * 0.5), fuse: 6 + Math.floor(Math.random() * 6) });
-      }
-      const grid = Array.from({ length: H }, () => new Array(W).fill(" "));
-      const put = (x, y, s) => {
-        const xi = Math.round(x), yi = Math.round(y);
-        if (xi >= 0 && xi < W && yi >= 0 && yi < H) grid[yi][xi] = s;
-      };
-      const nextRockets = [];
-      for (const r of rockets) {
-        r.y += r.vy; r.fuse--;
-        if (r.fuse <= 0 || r.y < H * 0.2) sparks.push(...explodeRocket(r, cols, chs));
-        else { put(r.x, r.y, P.butter + "↑" + P.reset); nextRockets.push(r); }
-      }
-      rockets = nextRockets;
-      sparks = sparks.filter((p) => p.life > 0 && p.y < H && p.x > -2 && p.x < W + 2);
-      for (const p of sparks) {
-        p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
-        put(p.x, p.y, (p.life < 4 ? P.dim : p.col) + p.ch + P.reset);
-      }
-      const ti = Math.floor(W / 2 - title.length / 2);
-      for (let i = 0; i < title.length && ti + i < W; i++) {
-        if (ti + i >= 0) grid[Math.floor(H / 2)][ti + i] = P.bold + P.butter + title[i] + P.reset;
-      }
-      process.stdout.write("\x1b[H" + grid.map((row) => row.join("")).join("\n"));
-      await sleep(110);
-    }
-  } finally {
-    if (screen) screen.celebrating = false;
-    if (cleanupKeys) cleanupKeys();
-    process.stdout.write("\x1b[?25h");
-  }
-}
-
-async function splash() {
-  // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
-  // Retourne : version dispo (string), null (à jour), undefined (hors ligne).
-  if (!process.stdout.isTTY) {
-    console.log(`AuraCode v${PKG.version}`);
-    return checkUpdate();
-  }
-  const W = process.stdout.columns || 80;
-  const H = process.stdout.rows || 24;
-  const center = (text, color) => {
-    const pad = " ".repeat(Math.max(0, Math.floor((W - text.length) / 2)));
-    return pad + (color ? P[color] + text + P.reset : text);
-  };
-  const block = [
-    ...ART_LINES.map((ln, i) => center(ln, ART_COLORS[i % ART_COLORS.length])),
-    center("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky"),
-    "",
-    center(`v${PKG.version}`, "dim"),
-    center(`build ${buildId()}`, "dim"),
-    "",
-  ];
-  block.splice(block.length - 1, 0, brandLine(W));
-  block.splice(block.length - 1, 0, adLine(W));
-  const topPad = Math.max(0, Math.floor((H - block.length - 1) / 2));
-  const statusRow = topPad + block.length + 1;
-  process.stdout.write("\x1b[?25l\x1b[2J\x1b[H");
-  process.stdout.write("\n".repeat(topPad));
-  for (const ln of block) process.stdout.write(ln + "\n");
-  const setStatus = (txt, color, rowOff = 0) => {
-    const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
-    process.stdout.write(`\x1b[${statusRow + rowOff};1H\x1b[K` + pad + (color ? P[color] + txt + P.reset : txt));
-  };
-  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-  const BAR_W = 26;
-  const bar = (p) => "█".repeat(Math.round(p * BAR_W)) + "─".repeat(BAR_W - Math.round(p * BAR_W));
-  // Phase 1 (2 s) : connexion au cloud VTH + barre de progression.
-  const healthP = fetch(API + "/health", { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false);
-  const t0 = Date.now();
-  await new Promise((res) => {
-    const iv = setInterval(() => {
-      const p = Math.min(1, (Date.now() - t0) / 2000);
-      const fi = Math.floor(Date.now() / 80) % frames.length;
-      setStatus(`${frames[fi]} Connexion au cloud VTH  ${bar(p)}`, "lavender", 0);
-      if (p >= 1) { clearInterval(iv); res(); }
-    }, 50);
-  });
-  const cloudOk = await healthP;
-  setStatus(cloudOk ? "✓ Connecté au cloud VTH" : "… Cloud injoignable — vérifie ta connexion", cloudOk ? "mint" : "peach", 0);
-  // Phase 2 (2 s) : vérification des mises à jour.
-  let latest = undefined, done = false;
-  const t1 = Date.now();
-  checkUpdate().then((v) => { latest = v; done = true; });
-  await new Promise((res) => {
-    const iv = setInterval(() => {
-      if (done && Date.now() - t1 >= 2000) { clearInterval(iv); res(); return; }
-      const fi = Math.floor(Date.now() / 80) % frames.length;
-      setStatus(`${frames[fi]} Vérification des mises à jour…`, "lavender", 1);
-    }, 80);
-  });
-  if (latest === undefined) setStatus("? Impossible de vérifier (hors ligne ?)", "peach", 1);
-  else if (latest) setStatus(`↓ Mise à jour ${latest} disponible — tape /update dans le chat`, "lemon", 1);
-  else setStatus(`✓ À jour (v${PKG.version})`, "mint", 1);
-  await sleep(900);
-  process.stdout.write("\x1b[?25h");
-  return latest;
-}
-
 // Comparaison semver : >0 si a plus récent, <0 si plus vieux, 0 si égaux.
 // (Évite les faux "update dispo" quand le code local est en avance sur main.)
 const cmpVer = (a, b) => {
@@ -371,429 +141,6 @@ const cmpVer = (a, b) => {
   }
   return 0;
 };
-
-async function checkUpdate() {
-  // Retourne la version distante SEULEMENT si strictement plus récente (semver),
-  // null si à jour ou en avance (dev), undefined si vérification impossible.
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
-    const r = await fetch("https://raw.githubusercontent.com/Grungyyt/auracode/main/cli/package.json", {
-      signal: ctrl.signal,
-      headers: { "User-Agent": "auracode" },
-    });
-    clearTimeout(t);
-    if (!r.ok) return undefined;
-    const latest = (await r.json()).version;
-    if (latest && cmpVer(latest, PKG.version) > 0) {
-      return latest;
-    }
-    return null;
-  } catch { return undefined; }
-}
-
-// Mise à jour : mode .exe via releases GitHub, mode script via fichiers du repo.
-async function selfUpdate(quiet = false) {
-  const lines = [];
-  const say = (t) => { lines.push(t); if (!quiet) console.log(t); };
-  const done = () => lines.join("\n");
-  const isExe = process.platform === "win32" && /auracode\.exe$/i.test(process.execPath);
-  if (isExe) {
-    say("Recherche de mise à jour...");
-    let rel;
-    try {
-      const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
-        headers: { "User-Agent": "auracode" },
-      });
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      rel = await r.json();
-    } catch (e) {
-      say("Impossible de contacter GitHub (" + e.message + ").");
-      return done();
-    }
-    const latest = (rel.tag_name || "").replace(/^v/, "");
-    if (!latest) {
-      say("Aucune release GitHub pour l'instant : réinstalle avec install.ps1 (mode script, toujours à jour).");
-      return done();
-    }
-    if (cmpVer(latest, PKG.version) <= 0) {
-      say("Déjà à jour (" + PKG.version + ").");
-      return done();
-    }
-    const asset = (rel.assets || []).find((a) => /auracode.*\.exe$/i.test(a.name));
-    if (!asset) { say("Aucun .exe dans la release " + rel.tag_name); return done(); }
-    const exePath = process.execPath;
-    const tmp = exePath + ".new";
-    say("Téléchargement " + latest + "...");
-    const dl = await fetch(asset.browser_download_url, { headers: { "User-Agent": "auracode" } });
-    fs.writeFileSync(tmp, Buffer.from(await dl.arrayBuffer()));
-    const ps = [
-      "$p='" + exePath + "'; $n='" + tmp + "'; $i=0;",
-      "while ((Test-Path $p) -and ($i -lt 120)) { try { Move-Item -Force $n $p; break } catch { Start-Sleep -Milliseconds 500 }; $i++ }",
-      "Start-Process $p;",
-    ].join(" ");
-    const { spawn } = require("child_process");
-    spawn("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], {
-      detached: true, stdio: "ignore",
-    }).unref();
-    say("Mise à jour installée, redémarrage...");
-    setTimeout(() => process.exit(0), 600);
-    return done();
-  }
-  // Mode script (install.ps1 / npm link) : re-télécharge les fichiers du repo.
-  // Garde anti-downgrade : ne JAMAIS écraser par une version égale ou plus ancienne
-  // (protège le dossier de dev si update est lancé depuis le repo).
-  say("Mise à jour depuis GitHub...");
-  try {
-    const base = "https://raw.githubusercontent.com/Grungyyt/auracode/main";
-    const head = { "User-Agent": "auracode" };
-    const rp = await (await fetch(base + "/cli/package.json", { headers: head })).json();
-    if (!rp.version || cmpVer(rp.version, PKG.version) <= 0) {
-      say("Déjà à jour (" + PKG.version + ").");
-      return done();
-    }
-    const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
-    if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
-    const dir = path.dirname(__filename);
-    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
-    fs.writeFileSync(__filename, js);
-    say("Mis à jour vers " + rp.version + ". Quitte (Ctrl+C) et relance auracode.");
-  } catch (e) {
-    say("Échec : " + e.message);
-  }
-  return done();
-}
-
-async function api(pathname, body, key, method = "POST", signal = undefined) {
-  const doFetch = (k) => fetch(API + pathname, {
-    method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${k}` },
-    ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
-    ...(signal ? { signal } : {}),
-  });
-  let res = await doFetch(isVthToken(key) && vthCurrent ? vthCurrent : key);
-  if (res.status === 401 && isVthToken(key) && !(signal && signal.aborted)) {
-    const fresh = await refreshVth();
-    if (fresh && fresh !== key) res = await doFetch(fresh);
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.error || ("HTTP " + res.status));
-    err.status = res.status;
-    err.data = data;
-    throw err;
-  }
-  return data;
-}
-
-function sessionFile() { return loadJson(SESSIONS_FILE, {}); }
-function getSessionId() { return sessionFile()[process.cwd()] || null; }
-function setSessionId(id) {
-  const m = sessionFile(); m[process.cwd()] = id; saveJson(SESSIONS_FILE, m);
-}
-async function newSession(key, model) {
-  const s = await api("/api/sessions", { model }, key);
-  setSessionId(s.session_id);
-  return s.session_id;
-}
-
-// ---------- Outils locaux (le PC) ----------
-// Accès complet au PC : résout le chemin (relatif au projet ou absolu).
-// Les écritures / exécutions demandent toujours confirmation (ui.confirm).
-function inside(p) {
-  return path.resolve(process.cwd(), p);
-}
-function ask(rl, q) {
-  return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
-}
-const TOOLS = {
-  read_file: {
-    desc: "Lit un fichier texte (max 20 Ko). Args: {path}",
-    run: async ({ path: p }) => fs.readFileSync(inside(p), "utf8").slice(0, 20000),
-  },
-  list_dir: {
-    desc: "Liste un dossier. Args: {path?} (défaut .)",
-    run: async ({ path: p = "." }) => fs.readdirSync(inside(p)).join("\n"),
-  },
-    write_file: {
-      desc: "Écris un fichier (demande confirmation). Args: {path, content}",
-      run: async ({ path: p, content }, ui) => {
-        const abs = inside(p);
-        let old = "";
-        try { old = fs.readFileSync(abs, "utf8"); } catch { /* nouveau fichier */ }
-        ui.sys(`--- ${old ? "Diff" : "Nouveau fichier"} ${p} (${(content || "").length} caractères) ---`);
-        (old ? diffLines(old, content || "").split("\n").slice(0, 25) : String(content || "").split("\n").slice(0, 25)).forEach((l) => ui.sys(l || " "));
-        ui.sys("--- fin aperçu ---");
-      if (!(await ui.confirm("Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
-      fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, content || "");
-      return "Fichier écrit : " + p;
-    },
-  },
-  exec: {
-    desc: "Exécute une commande shell (demande confirmation). Args: {cmd}",
-    run: (args, ui) => new Promise(async (resolve) => {
-      ui.sys("$ " + args.cmd);
-      if (!(await ui.confirm("Exécuter ?"))) return resolve("Annulé par l'utilisateur.");
-      exec(args.cmd, { cwd: process.cwd(), timeout: 60000, maxBuffer: 1024 * 500 }, (err, stdout, stderr) => {
-        let out = (stdout || "") + (stderr ? "\n[stderr]\n" + stderr : "");
-        if (err && !out) out = "Erreur: " + err.message;
-        resolve(out.slice(0, 8000) || "(pas de sortie)");
-      });
-    }),
-  },
-  search: {
-    desc: "Cherche un texte dans les fichiers. Args: {pattern, path?}",
-    run: async ({ pattern, path: p = "." }) => {
-      const out = [];
-      const walk = (dir) => {
-        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-          if (e.name === "node_modules" || e.name === ".git") continue;
-          const full = path.join(dir, e.name);
-          if (e.isDirectory()) { if (out.join("\n").length < 6000) walk(full); }
-          else {
-            try {
-              const c = fs.readFileSync(full, "utf8");
-              c.split("\n").forEach((l, i) => {
-                if (l.includes(pattern) && out.length < 60) out.push(`${full}:${i + 1}: ${l.trim().slice(0, 160)}`);
-              });
-            } catch { /* binaire, ignoré */ }
-          }
-        }
-      };
-      walk(inside(p));
-      return out.join("\n") || "Aucun résultat.";
-    },
-  },
-  open_file: {
-    desc: "Ouvre un fichier/dossier avec le programme par défaut (demande confirmation). Args: {path}",
-    run: async ({ path: p }, ui) => {
-      const abs = inside(p);
-      const plat = process.platform;
-      const cmd = plat === "win32" ? `start "" "${abs}"` : plat === "darwin" ? `open "${abs}"` : `xdg-open "${abs}"`;
-      if (!(await ui.confirm(`Ouvrir ${p} ?`))) return "Annulé par l'utilisateur.";
-      await new Promise((resolve, reject) =>
-        exec(cmd, { timeout: 15000 }, (e) => (e ? reject(e) : resolve(null))));
-      return "Ouvert : " + p;
-    },
-  },
-  sysinfo: {
-    desc: "Infos système (OS, CPU, RAM). Args: {}",
-    run: async () => {
-      const o = require("os");
-      const total = Math.round(o.totalmem() / 1073741824) + " Go";
-      const free = Math.round(o.freemem() / 1073741824) + " Go";
-      return `OS: ${o.platform()} ${o.release()} (${o.arch()})\nCPU: ${o.cpus()[0].model} x${o.cpus().length}\nRAM: ${free} libres / ${total}\nDossier: ${process.cwd()}`;
-    },
-  },
-};
-
-const SYSTEM = `Tu es AuraCode, un agent qui pilote DIRECTEMENT le PC de l'utilisateur via des outils. Ce n'est pas une simulation : quand tu émets un bloc outil, le programme l'exécute vraiment sur le PC puis te renvoie le résultat. Réponds en français, concis.
-Pour agir, réponds UNIQUEMENT avec un bloc outil (une action à la fois) :
-<tool name="NOM">{"arg": "valeur"}</tool>
-Exemple : <tool name="write_file">{"path": "C:/Users/test.txt", "content": "coucou"}</tool>
-Outils disponibles :
-- read_file {"path"} : lire un fichier
-- list_dir {"path"?} : lister un dossier
-- write_file {"path", "content"} : écrire un fichier
-- exec {"cmd"} : commande shell
-- search {"pattern", "path"?} : chercher du texte
-- open_file {"path"} : ouvrir un fichier/dossier avec le programme par défaut
-- sysinfo {} : infos du PC (OS, CPU, RAM)
-- Accès COMPLET au PC : tous les disques et dossiers, chemins relatifs OU absolus (ex C:/Docs/fichier.txt, D:/projet).
-- Le dossier actuel et l'OS sont rappelés dans chaque demande ([Contexte PC]) : utilise-les pour construire tes chemins.
-Règles : une seule action par réponse. Quand tu as fini, réponds normalement SANS bloc outil. Quand l'utilisateur demande une action sur son PC (créer/lire/modifier un fichier ou dossier, exécuter une commande), tu DOIS émettre un bloc outil : ne dis JAMAIS que tu ne peux pas créer de fichiers, que tu es un chatbot web ou que l'utilisateur doit le faire lui-même.`;
-
-function extractTool(text) {
-  const m = /<tool\s+name="([^"]+)">([\s\S]*?)<\/tool>/.exec(text || "");
-  if (!m) return null;
-  try { return { name: m[1], args: JSON.parse(m[2]) }; }
-  catch { return { name: m[1], args: {}, _raw: m[2] }; }
-}
-
-// La demande ressemble-t-elle à une action sur le PC ?
-const wantsAction = (t) => /\b(cré|cree|créer|creer|écris|ecris|écrire|ecrire|lis|lire|lisez|ouvre|ouvrir|ouvrez|exécute|execute|exécuter|lance|lancer|cherche|chercher|trouve|trouver|modifie|modifier|supprime|supprimer|renomme|déplace|copie|copier|fichier|dossier|script|programme|installe|télécharge)\b/i.test(t || "");
-
-// Chronomètre de réflexion (onTick reçoit les secondes, ou null à la fin).
-async function timedCall(fn, onTick) {
-  const start = Date.now();
-  const timer = setInterval(() => {
-    if (onTick) onTick((Date.now() - start) / 1000);
-  }, 150);
-  try {
-    const data = await fn();
-    return { data, elapsed: (Date.now() - start) / 1000 };
-  } finally {
-    clearInterval(timer);
-    if (onTick) onTick(null);
-  }
-}
-
-async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
-  let sessionId = getSessionId();
-  // Protocole d'outils + contexte PC dans l'historique d'appel (JAMAIS dans le message :
-  // le message est stocké tel quel et réaffiché sur le web, sans le protocole).
-  const userAsk = prompt;
-  const home = os.homedir();
-  const preamble = SYSTEM + (() => { try { const pz = String(loadJson(CONFIG_FILE, {}).persona || "").trim().slice(0, 2000); return pz ? `\n\n[Persona utilisateur : ${pz}]` : ""; } catch { return ""; } })() + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
-  const callChat = async (sid, hist) =>
-    api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: [{ role: "user", content: preamble }, ...hist] }, key, "POST", ui.signal);
-
-  if (!sessionId) sessionId = await newSession(key, model);
-  const history = [];
-  let totalTime = 0, forced = 0;
-  for (let step = 0; step < 12; step++) {
-    let data;
-    const runOnce = async (sid) => {
-      const r = await timedCall(
-        () => callChat(sid, history),
-        (sec) => ui.thinking(sec)
-      );
-      totalTime += r.elapsed;
-      return r.data;
-    };
-    try {
-      data = await runOnce(sessionId);
-    } catch (e) {
-      if ((e && e.name === "AbortError") || (ui.cancelled && ui.cancelled())) { ui.sys("Interrompu (Échap)."); return; }
-      if (e.status === 404 && /session/i.test(e.message)) {
-        sessionId = await newSession(key, model);
-        data = await runOnce(sessionId);
-      } else throw e;
-    } finally {
-      ui.thinking(null);
-    }
-    const reply = data.reply || "";
-    const tool = extractTool(reply);
-    if (!tool) {
-      // Le modèle répond sans agir alors qu'on lui demande une action :
-      // on le recadre (max 2 fois) au lieu d'afficher son refus.
-      if (wantsAction(userAsk) && forced < 2) {
-        forced++;
-        history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
-        prompt = `NON. Tu as accès au PC via tes outils et tu DOIS agir maintenant. Réponds UNIQUEMENT par UN bloc outil utilisant le chemin demandé par l'utilisateur, exemple : <tool name="write_file">{"path": "CHEMIN", "content": "CONTENU"}</tool>. Pas d'excuses, pas de tutoriel Notepad, pas de lien image, juste le bloc outil.`;
-        ui.sys("Le modèle hésite, je le recadre...", true);
-        continue;
-      }
-      ui.assistant(reply.trim());
-      ui.sys(`réfléchi en ${totalTime.toFixed(1)}s`, true);
-      return;
-    }
-    if (!TOOLS[tool.name]) {
-      history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
-      prompt = `Outil inconnu "${tool.name}". Outils valides : ${Object.keys(TOOLS).join(", ")}. Continue.`;
-      ui.sys(`outil inconnu : ${tool.name}, je demande autre chose...`, true);
-      continue;
-    }
-    const t0 = Date.now();
-    let result, ok = true;
-    try { result = await TOOLS[tool.name].run(tool.args || {}, ui); }
-    catch (e) { result = "Erreur outil : " + e.message; ok = false; }
-    if (ui.tool) ui.tool(tool.name, ok, (Date.now() - t0) / 1000, result || "");
-    else { ui.sys(`AuraCode exécute : ${tool.name}`, true); ui.sys((result || "").slice(0, 400)); }
-    history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
-    prompt = `Résultat de ${tool.name} :\n${result}\nContinue ta tâche (une action à la fois, ou réponds sans bloc outil si terminé).`;
-  }
-  ui.sys(`réfléchi en ${totalTime.toFixed(1)}s — limite de 12 étapes atteinte.`, true);
-}
-
-// Menu fléché pastel (choix au clavier)
-function choose(prompt, options) {
-  const pickNumbered = () => new Promise((resolve) => {
-    console.log(pastel("lavender", "◆ " + prompt));
-    options.forEach((o, i) => console.log(`  ${i + 1}. ${o.label}${o.desc ? "  —  " + o.desc : ""}`));
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question("Numéro : ", (a) => {
-      rl.close();
-      const n = parseInt(a.trim(), 10);
-      resolve(n >= 1 && n <= options.length ? options[n - 1].value : null);
-    });
-  });
-  if (!process.stdin.isTTY) return pickNumbered();
-  return new Promise((resolve) => {
-    let idx = 0;
-    readline.emitKeypressEvents(process.stdin);
-    process.stdin.setRawMode(true);
-    const render = () => {
-      console.clear();
-      console.log(P.bold + P.lavender + "◆ " + prompt + P.reset + "\n");
-      options.forEach((o, i) => {
-        const active = i === idx;
-        const prefix = active ? pastel("pink", "❯ ") : "  ";
-        const name = active ? P.bold + P.lemon + o.label + P.reset : P.dim + o.label + P.reset;
-        console.log(prefix + name + (o.desc ? P.dim + "  —  " + o.desc + P.reset : ""));
-      });
-      console.log("\n" + P.dim + "↑↓ naviguer • Entrée valider • Échap annuler" + P.reset);
-    };
-    const cleanup = () => {
-      process.stdin.removeListener("keypress", onKey);
-      if (process.stdin.isTTY) process.stdin.setRawMode(false);
-    };
-    const onKey = (str, key) => {
-      if (key.name === "up") { idx = (idx - 1 + options.length) % options.length; render(); }
-      else if (key.name === "down") { idx = (idx + 1) % options.length; render(); }
-      else if (key.name === "return") { cleanup(); console.clear(); resolve(options[idx].value); }
-      else if (key.name === "escape" || (key.ctrl && key.name === "c")) { cleanup(); console.clear(); resolve(null); }
-    };
-    process.stdin.on("keypress", onKey);
-    render();
-  });
-}
-
-// ---------- Écran d'installation ----------
-async function cmdSetup() {
-  console.clear();
-  pastelBox("Bienvenue dans AuraCode — installation", [
-    pastel("sky", "Configuration en 3 étapes, couleurs pastel incluses."),
-    "",
-  ]);
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const askLine = (q) => new Promise((res) => rl.question(P.sky + "◆ " + q + P.reset + " ", res));
-
-  // 1. Clé API (mémoire seule : jamais stockée, login à chaque lancement)
-  console.log("\n" + pastel("lavender", "◆ Étape 1/3 — Colle ta clé API (ak-vth-... depuis https://auth.vth-mc.fr/profile)"));
-  const key = (await askLine("Clé :")).trim();
-  if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
-  memApiKey = key;
-
-  // 2. Modèle (avec stats visibles)
-  console.log("");
-  const model = await choose("Étape 2/3 — Choisis ton modèle", [
-    { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
-    { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
-    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM) • 🔒 dim. 18 oct. 17h" },
-    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
-  ]);
-  if (!model) { console.log("Annulé."); rl.close(); return; }
-
-  // 3. Effort (avec temps et coût visibles)
-  console.log("");
-  const effort = (await choose("Étape 3/3 — Niveau de réflexion", [
-    { value: "low", label: "Low", desc: "~5-10s • 256 tokens • coût x1 • réponses courtes" },
-    { value: "middle", label: "Middle", desc: "~15-30s • 512 tokens • coût x1 • équilibré" },
-    { value: "high", label: "High", desc: "~1-2 min • 1024 tokens • coût x1.5 • détaillé" },
-    { value: "xhigh", label: "XHigh", desc: "~2-4 min • 1536 tokens • coût x2 • réflexion maximale" },
-  ])) || "middle";
-
-  const cfg = loadJson(CONFIG_FILE, {});
-  cfg.model = model; cfg.effort = effort;
-  saveJson(CONFIG_FILE, cfg);
-  rl.close();
-
-  console.log("\n" + pastel("sky", "◆ Test de connexion au cloud..."));
-  try {
-    const me = await api("/api/me", null, key, "GET");
-    console.log(pastel("mint", `✓ Connecté ! ${me.sessions || 0} discussion(s) sur ton compte.`));
-  } catch (e) {
-    console.log(pastel("pink", "✗ Échec : " + e.message + " (vérifie ta clé)"));
-    return;
-  }
-  pastelBox("Installation terminée ✓", [
-    `Modèle par défaut : ${pastel("lemon", model)}   Effort : ${pastel("lemon", effort)}`,
-    "",
-    "Lance " + P.bold + "auracode" + P.reset + " pour discuter avec ton PC.",
-  ]);
-}
 
 // ---------- Helpers d'affichage (style opencode) ----------
 const stripAnsi = (s) => String(s || "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -1156,6 +503,797 @@ const cowSay = (text) => {
 };
 const slugify = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
+const timeStr = () => {
+  try { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+  catch { return ""; }
+};
+
+function wrapText(text, width) {
+  const out = [];
+  for (const para of String(text).split("\n")) {
+    if (para === "") { out.push(""); continue; }
+    let line = para;
+    while (line.length > width) {
+      let cut = line.lastIndexOf(" ", width);
+      if (cut <= 0) cut = width;
+      out.push(line.slice(0, cut));
+      line = line.slice(cut).replace(/^ +/, "");
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// ---------- Écran plein terminal ----------
+// cli/src/backend.js — API, agent, outils, auth, sessions, update.
+// Bundlé : symboles partagés fournis par shared.js (même portée finale).
+
+const API = process.env.AURA_API || "https://api.ia.vth-mc.fr";
+// ---------- Auth VTH (OAuth service AuraCode) ----------
+// La CLÉ PRIVÉE ne vit QUE sur le VPS (jamais dans ce fichier public).
+// Le CLI obtient access/refresh via le VPS (/api/auth/exchange).
+const VTH_FILE = path.join(HOME, "vth.json"); // historique : plus jamais écrit (mémoire seule)
+const AURA_PUBLIC_ID = process.env.AURA_PUBLIC_ID || "N8FjCur0OABUofZBIwBibnEMTN9RrA4F";
+const AURA_AUTH_BASE = (process.env.AURA_AUTH_BASE || "https://auth.vth-mc.fr").replace(/\/$/, "");
+const AURA_LOGIN_PORT = parseInt(process.env.AURA_LOGIN_PORT || "3000", 10) || 3000;
+let memVthStore = null;
+const loadVth = () => memVthStore || {};
+const saveVth = (o) => { memVthStore = o; };
+const clearVth = () => { memVthStore = null; };
+let memApiKey = null;
+let vthCurrent = null; // access token en cours (évite les doubles refresh)
+const isVthToken = (k) => typeof k === "string" && k.startsWith("vth-acc.");
+// State CSRF 32 chars (doc VTH : lettres, chiffres, - et _).
+const newState32 = () => {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const b = crypto.randomBytes(32);
+  let s = "";
+  for (let i = 0; i < b.length && s.length < 32; i++) s += A[b[i] % 64];
+  if (s.length < 32) throw new Error("state trop court");
+  return s;
+};
+const vthAuthorizeUrl = (state) =>
+  `${AURA_AUTH_BASE}/authorize?public_token=${encodeURIComponent(AURA_PUBLIC_ID)}&state=${encodeURIComponent(state)}`;
+function openBrowser(url) {
+  try {
+    const plat = process.platform;
+    const cmd = plat === "win32" ? `start "" "${url}"` : plat === "darwin" ? `open "${url}"` : `xdg-open "${url}"`;
+    exec(cmd, { timeout: 10000 }, () => {});
+  } catch { /* ignore */ }
+}
+// Résout un access token : mémoire -> fichier -> refresh via VPS.
+async function vthAccess() {
+  if (vthCurrent) return vthCurrent;
+  const v = loadVth();
+  if (v && v.access_token) { vthCurrent = v.access_token; return vthCurrent; }
+  if (v && v.refresh_token) return refreshVth();
+  return null;
+}
+let refreshP = null;
+async function refreshVth() {
+  if (refreshP) return refreshP;
+  refreshP = (async () => {
+    try {
+      const v = loadVth();
+      if (!v || !v.refresh_token) return null;
+      const r = await fetch(API + "/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: v.refresh_token }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j.access_token) { clearVth(); vthCurrent = null; return null; }
+      saveVth({ access_token: j.access_token, refresh_token: j.refresh_token || v.refresh_token, obtained_at: Date.now() });
+      vthCurrent = j.access_token;
+      return vthCurrent;
+    } catch { return null; }
+    finally { refreshP = null; }
+  })();
+  return refreshP;
+}
+// IMPORTANT : garder synchronisé avec cli/package.json (vérifié par scripts/build-exe.js)
+const getKey = () => (memApiKey || "").trim();
+
+// Migration sécurité : les tokens ne sont plus stockés sur disque.
+// Purge au démarrage (une fois) : clé config + vth.json oubliés.
+function purgeStoredSecrets() {
+  let wiped = false;
+  try {
+    const cfg = loadJson(CONFIG_FILE, {});
+    if (cfg.apiKey) { delete cfg.apiKey; saveJson(CONFIG_FILE, cfg); wiped = true; }
+  } catch { /* ignore */ }
+  try {
+    if (fs.existsSync(VTH_FILE)) { fs.unlinkSync(VTH_FILE); wiped = true; }
+  } catch { /* ignore */ }
+  if (wiped) console.log("Anciens tokens locaux supprimés (désormais : mémoire seule, login à chaque lancement).");
+}
+
+// Dossier d'installation à désinstaller (jamais le dossier projet courant).
+async function checkUpdate() {
+  // Retourne la version distante SEULEMENT si strictement plus récente (semver),
+  // null si à jour ou en avance (dev), undefined si vérification impossible.
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const r = await fetch("https://raw.githubusercontent.com/Grungyyt/auracode/main/cli/package.json", {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "auracode" },
+    });
+    clearTimeout(t);
+    if (!r.ok) return undefined;
+    const latest = (await r.json()).version;
+    if (latest && cmpVer(latest, PKG.version) > 0) {
+      return latest;
+    }
+    return null;
+  } catch { return undefined; }
+}
+
+// Mise à jour : mode .exe via releases GitHub, mode script via fichiers du repo.
+async function selfUpdate(quiet = false) {
+  const lines = [];
+  const say = (t) => { lines.push(t); if (!quiet) console.log(t); };
+  const done = () => lines.join("\n");
+  const isExe = process.platform === "win32" && /auracode\.exe$/i.test(process.execPath);
+  if (isExe) {
+    say("Recherche de mise à jour...");
+    let rel;
+    try {
+      const r = await fetch("https://api.github.com/Grungyyt/auracode/releases/latest", {
+        headers: { "User-Agent": "auracode" },
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      rel = await r.json();
+    } catch (e) {
+      say("Impossible de contacter GitHub (" + e.message + ").");
+      return done();
+    }
+    const latest = (rel.tag_name || "").replace(/^v/, "");
+    if (!latest) {
+      say("Aucune release GitHub pour l'instant : réinstalle avec install.ps1 (mode script, toujours à jour).");
+      return done();
+    }
+    if (cmpVer(latest, PKG.version) <= 0) {
+      say("Déjà à jour (" + PKG.version + ").");
+      return done();
+    }
+    const asset = (rel.assets || []).find((a) => /auracode.*\.exe$/i.test(a.name));
+    if (!asset) { say("Aucun .exe dans la release " + rel.tag_name); return done(); }
+    const exePath = process.execPath;
+    const tmp = exePath + ".new";
+    say("Téléchargement " + latest + "...");
+    const dl = await fetch(asset.browser_download_url, { headers: { "User-Agent": "auracode" } });
+    fs.writeFileSync(tmp, Buffer.from(await dl.arrayBuffer()));
+    const ps = [
+      "$p='" + exePath + "'; $n='" + tmp + "'; $i=0;",
+      "while ((Test-Path $p) -and ($i -lt 120)) { try { Move-Item -Force $n $p; break } catch { Start-Sleep -Milliseconds 500 }; $i++ }",
+      "Start-Process $p;",
+    ].join(" ");
+    const { spawn } = require("child_process");
+    spawn("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], {
+      detached: true, stdio: "ignore",
+    }).unref();
+    say("Mise à jour installée, redémarrage...");
+    setTimeout(() => process.exit(0), 600);
+    return done();
+  }
+  // Mode script (install.ps1 / npm link) : re-télécharge les fichiers du repo.
+  // Garde anti-downgrade : ne JAMAIS écraser par une version égale ou plus ancienne
+  // (protège le dossier de dev si update est lancé depuis le repo).
+  say("Mise à jour depuis GitHub...");
+  try {
+    const base = "https://raw.githubusercontent.com/Grungyyt/auracode/main";
+    const head = { "User-Agent": "auracode" };
+    const rp = await (await fetch(base + "/cli/package.json", { headers: head })).json();
+    if (!rp.version || cmpVer(rp.version, PKG.version) <= 0) {
+      say("Déjà à jour (" + PKG.version + ").");
+      return done();
+    }
+    const js = await (await fetch(base + "/cli/bin/auracode.js", { headers: head })).text();
+    if (!js.includes("AuraCode")) throw new Error("Téléchargement invalide.");
+    const dir = path.dirname(__filename);
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(rp, null, 2));
+    fs.writeFileSync(__filename, js);
+    say("Mis à jour vers " + rp.version + ". Quitte (Ctrl+C) et relance auracode.");
+  } catch (e) {
+    say("Échec : " + e.message);
+  }
+  return done();
+}
+
+async function api(pathname, body, key, method = "POST", signal = undefined) {
+  const doFetch = (k) => fetch(API + pathname, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${k}` },
+    ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
+    ...(signal ? { signal } : {}),
+  });
+  let res = await doFetch(isVthToken(key) && vthCurrent ? vthCurrent : key);
+  if (res.status === 401 && isVthToken(key) && !(signal && signal.aborted)) {
+    const fresh = await refreshVth();
+    if (fresh && fresh !== key) res = await doFetch(fresh);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || ("HTTP " + res.status));
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+function sessionFile() { return loadJson(SESSIONS_FILE, {}); }
+function getSessionId() { return sessionFile()[process.cwd()] || null; }
+function setSessionId(id) {
+  const m = sessionFile(); m[process.cwd()] = id; saveJson(SESSIONS_FILE, m);
+}
+async function newSession(key, model) {
+  const s = await api("/api/sessions", { model }, key);
+  setSessionId(s.session_id);
+  return s.session_id;
+}
+
+// ---------- Outils locaux (le PC) ----------
+// Accès complet au PC : résout le chemin (relatif au projet ou absolu).
+// Les écritures / exécutions demandent toujours confirmation (ui.confirm).
+function inside(p) {
+  return path.resolve(process.cwd(), p);
+}
+function ask(rl, q) {
+  return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
+}
+const TOOLS = {
+  read_file: {
+    desc: "Lit un fichier texte (max 20 Ko). Args: {path}",
+    run: async ({ path: p }) => fs.readFileSync(inside(p), "utf8").slice(0, 20000),
+  },
+  list_dir: {
+    desc: "Liste un dossier. Args: {path?} (défaut .)",
+    run: async ({ path: p = "." }) => fs.readdirSync(inside(p)).join("\n"),
+  },
+    write_file: {
+      desc: "Écris un fichier (demande confirmation). Args: {path, content}",
+      run: async ({ path: p, content }, ui) => {
+        const abs = inside(p);
+        let old = "";
+        try { old = fs.readFileSync(abs, "utf8"); } catch { /* nouveau fichier */ }
+        ui.sys(`--- ${old ? "Diff" : "Nouveau fichier"} ${p} (${(content || "").length} caractères) ---`);
+        (old ? diffLines(old, content || "").split("\n").slice(0, 25) : String(content || "").split("\n").slice(0, 25)).forEach((l) => ui.sys(l || " "));
+        ui.sys("--- fin aperçu ---");
+      if (!(await ui.confirm("Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content || "");
+      return "Fichier écrit : " + p;
+    },
+  },
+  exec: {
+    desc: "Exécute une commande shell (demande confirmation). Args: {cmd}",
+    run: (args, ui) => new Promise(async (resolve) => {
+      ui.sys("$ " + args.cmd);
+      if (!(await ui.confirm("Exécuter ?"))) return resolve("Annulé par l'utilisateur.");
+      exec(args.cmd, { cwd: process.cwd(), timeout: 60000, maxBuffer: 1024 * 500 }, (err, stdout, stderr) => {
+        let out = (stdout || "") + (stderr ? "\n[stderr]\n" + stderr : "");
+        if (err && !out) out = "Erreur: " + err.message;
+        resolve(out.slice(0, 8000) || "(pas de sortie)");
+      });
+    }),
+  },
+  search: {
+    desc: "Cherche un texte dans les fichiers. Args: {pattern, path?}",
+    run: async ({ pattern, path: p = "." }) => {
+      const out = [];
+      const walk = (dir) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (e.name === "node_modules" || e.name === ".git") continue;
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) { if (out.join("\n").length < 6000) walk(full); }
+          else {
+            try {
+              const c = fs.readFileSync(full, "utf8");
+              c.split("\n").forEach((l, i) => {
+                if (l.includes(pattern) && out.length < 60) out.push(`${full}:${i + 1}: ${l.trim().slice(0, 160)}`);
+              });
+            } catch { /* binaire, ignoré */ }
+          }
+        }
+      };
+      walk(inside(p));
+      return out.join("\n") || "Aucun résultat.";
+    },
+  },
+  open_file: {
+    desc: "Ouvre un fichier/dossier avec le programme par défaut (demande confirmation). Args: {path}",
+    run: async ({ path: p }, ui) => {
+      const abs = inside(p);
+      const plat = process.platform;
+      const cmd = plat === "win32" ? `start "" "${abs}"` : plat === "darwin" ? `open "${abs}"` : `xdg-open "${abs}"`;
+      if (!(await ui.confirm(`Ouvrir ${p} ?`))) return "Annulé par l'utilisateur.";
+      await new Promise((resolve, reject) =>
+        exec(cmd, { timeout: 15000 }, (e) => (e ? reject(e) : resolve(null))));
+      return "Ouvert : " + p;
+    },
+  },
+  sysinfo: {
+    desc: "Infos système (OS, CPU, RAM). Args: {}",
+    run: async () => {
+      const o = require("os");
+      const total = Math.round(o.totalmem() / 1073741824) + " Go";
+      const free = Math.round(o.freemem() / 1073741824) + " Go";
+      return `OS: ${o.platform()} ${o.release()} (${o.arch()})\nCPU: ${o.cpus()[0].model} x${o.cpus().length}\nRAM: ${free} libres / ${total}\nDossier: ${process.cwd()}`;
+    },
+  },
+};
+
+const SYSTEM = `Tu es AuraCode, un agent qui pilote DIRECTEMENT le PC de l'utilisateur via des outils. Ce n'est pas une simulation : quand tu émets un bloc outil, le programme l'exécute vraiment sur le PC puis te renvoie le résultat. Réponds en français, concis.
+Pour agir, réponds UNIQUEMENT avec un bloc outil (une action à la fois) :
+<tool name="NOM">{"arg": "valeur"}</tool>
+Exemple : <tool name="write_file">{"path": "C:/Users/test.txt", "content": "coucou"}</tool>
+Outils disponibles :
+- read_file {"path"} : lire un fichier
+- list_dir {"path"?} : lister un dossier
+- write_file {"path", "content"} : écrire un fichier
+- exec {"cmd"} : commande shell
+- search {"pattern", "path"?} : chercher du texte
+- open_file {"path"} : ouvrir un fichier/dossier avec le programme par défaut
+- sysinfo {} : infos du PC (OS, CPU, RAM)
+- Accès COMPLET au PC : tous les disques et dossiers, chemins relatifs OU absolus (ex C:/Docs/fichier.txt, D:/projet).
+- Le dossier actuel et l'OS sont rappelés dans chaque demande ([Contexte PC]) : utilise-les pour construire tes chemins.
+Règles : une seule action par réponse. Quand tu as fini, réponds normalement SANS bloc outil. Quand l'utilisateur demande une action sur son PC (créer/lire/modifier un fichier ou dossier, exécuter une commande), tu DOIS émettre un bloc outil : ne dis JAMAIS que tu ne peux pas créer de fichiers, que tu es un chatbot web ou que l'utilisateur doit le faire lui-même.`;
+
+function extractTool(text) {
+  const m = /<tool\s+name="([^"]+)">([\s\S]*?)<\/tool>/.exec(text || "");
+  if (!m) return null;
+  try { return { name: m[1], args: JSON.parse(m[2]) }; }
+  catch { return { name: m[1], args: {}, _raw: m[2] }; }
+}
+
+// La demande ressemble-t-elle à une action sur le PC ?
+const wantsAction = (t) => /\b(cré|cree|créer|creer|écris|ecris|écrire|ecrire|lis|lire|lisez|ouvre|ouvrir|ouvrez|exécute|execute|exécuter|lance|lancer|cherche|chercher|trouve|trouver|modifie|modifier|supprime|supprimer|renomme|déplace|copie|copier|fichier|dossier|script|programme|installe|télécharge)\b/i.test(t || "");
+
+// Chronomètre de réflexion (onTick reçoit les secondes, ou null à la fin).
+async function timedCall(fn, onTick) {
+  const start = Date.now();
+  const timer = setInterval(() => {
+    if (onTick) onTick((Date.now() - start) / 1000);
+  }, 150);
+  try {
+    const data = await fn();
+    return { data, elapsed: (Date.now() - start) / 1000 };
+  } finally {
+    clearInterval(timer);
+    if (onTick) onTick(null);
+  }
+}
+
+async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
+  let sessionId = getSessionId();
+  // Protocole d'outils + contexte PC dans l'historique d'appel (JAMAIS dans le message :
+  // le message est stocké tel quel et réaffiché sur le web, sans le protocole).
+  const userAsk = prompt;
+  const home = os.homedir();
+  const preamble = SYSTEM + (() => { try { const pz = String(loadJson(CONFIG_FILE, {}).persona || "").trim().slice(0, 2000); return pz ? `\n\n[Persona utilisateur : ${pz}]` : ""; } catch { return ""; } })() + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
+  const callChat = async (sid, hist) =>
+    api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: [{ role: "user", content: preamble }, ...hist] }, key, "POST", ui.signal);
+
+  if (!sessionId) sessionId = await newSession(key, model);
+  const history = [];
+  let totalTime = 0, forced = 0;
+  for (let step = 0; step < 12; step++) {
+    let data;
+    const runOnce = async (sid) => {
+      const r = await timedCall(
+        () => callChat(sid, history),
+        (sec) => ui.thinking(sec)
+      );
+      totalTime += r.elapsed;
+      return r.data;
+    };
+    try {
+      data = await runOnce(sessionId);
+    } catch (e) {
+      if ((e && e.name === "AbortError") || (ui.cancelled && ui.cancelled())) { ui.sys("Interrompu (Échap)."); return; }
+      if (e.status === 404 && /session/i.test(e.message)) {
+        sessionId = await newSession(key, model);
+        data = await runOnce(sessionId);
+      } else throw e;
+    } finally {
+      ui.thinking(null);
+    }
+    const reply = data.reply || "";
+    const tool = extractTool(reply);
+    if (!tool) {
+      // Le modèle répond sans agir alors qu'on lui demande une action :
+      // on le recadre (max 2 fois) au lieu d'afficher son refus.
+      if (wantsAction(userAsk) && forced < 2) {
+        forced++;
+        history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
+        prompt = `NON. Tu as accès au PC via tes outils et tu DOIS agir maintenant. Réponds UNIQUEMENT par UN bloc outil utilisant le chemin demandé par l'utilisateur, exemple : <tool name="write_file">{"path": "CHEMIN", "content": "CONTENU"}</tool>. Pas d'excuses, pas de tutoriel Notepad, pas de lien image, juste le bloc outil.`;
+        ui.sys("Le modèle hésite, je le recadre...", true);
+        continue;
+      }
+      ui.assistant(reply.trim());
+      ui.sys(`réfléchi en ${totalTime.toFixed(1)}s`, true);
+      return;
+    }
+    if (!TOOLS[tool.name]) {
+      history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
+      prompt = `Outil inconnu "${tool.name}". Outils valides : ${Object.keys(TOOLS).join(", ")}. Continue.`;
+      ui.sys(`outil inconnu : ${tool.name}, je demande autre chose...`, true);
+      continue;
+    }
+    const t0 = Date.now();
+    let result, ok = true;
+    try { result = await TOOLS[tool.name].run(tool.args || {}, ui); }
+    catch (e) { result = "Erreur outil : " + e.message; ok = false; }
+    if (ui.tool) ui.tool(tool.name, ok, (Date.now() - t0) / 1000, result || "");
+    else { ui.sys(`AuraCode exécute : ${tool.name}`, true); ui.sys((result || "").slice(0, 400)); }
+    history.push({ role: "user", content: prompt }, { role: "assistant", content: reply });
+    prompt = `Résultat de ${tool.name} :\n${result}\nContinue ta tâche (une action à la fois, ou réponds sans bloc outil si terminé).`;
+  }
+  ui.sys(`réfléchi en ${totalTime.toFixed(1)}s — limite de 12 étapes atteinte.`, true);
+}
+
+// Menu fléché pastel (choix au clavier)
+async function cmdLoginOAuth() {
+  const http = require("http");
+  const state = newState32();
+  let used = false;
+  let finish = null;
+  let timer = null;
+  const page = (title, body) => `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family:system-ui,sans-serif;background:#f5f2eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0"><div style="background:#fff;border-radius:16px;padding:40px 48px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.08);max-width:420px"><h1 style="margin:0 0 8px">AuraCode</h1><p style="color:#666">${body}</p></div></body></html>`;
+  const server = http.createServer(async (req, res) => {
+    try {
+      const u = new URL(req.url || "/", "http://127.0.0.1");
+      if (u.pathname === "/login") {
+        const authUrl = vthAuthorizeUrl(state);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(page("AuraCode — Connexion", `Connecte-toi avec ton compte VTH.<br><br><a href="${authUrl.replace(/&/g, "&amp;")}" style="display:inline-block;background:#c15f3c;color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600">Se connecter avec VTH</a>`));
+        return;
+      }
+      if (u.pathname === "/auracode/auth/callback") {
+        const st = u.searchParams.get("state") || "";
+        const code = u.searchParams.get("secretCode") || "";
+        const same = st.length > 0 && st.length === state.length && crypto.timingSafeEqual(Buffer.from(st), Buffer.from(state));
+        if (used || !same || !code) {
+          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(page("Échec", "Session invalide ou expirée. Relance <code>auracode login</code> dans ton terminal."));
+          finish(null);
+          return;
+        }
+        used = true;
+        try {
+          const r = await fetch(API + "/api/auth/exchange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!j.access_token) throw new Error(j.error || ("HTTP " + r.status));
+          saveVth({ access_token: j.access_token, refresh_token: j.refresh_token || null, obtained_at: Date.now() });
+          vthCurrent = j.access_token;
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(page("Connecté ✓", "Ton compte VTH est lié. Retourne dans ton terminal, c'est prêt."));
+          finish(true);
+        } catch (e) {
+          res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(page("Échec", "Échange impossible : " + String((e && e.message) || e)));
+          finish(null);
+        }
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("?");
+    } catch {
+      try { res.writeHead(500); res.end("?"); } catch { /* ignore */ }
+    }
+  });
+  const ok = await new Promise((resolve) => {
+    finish = (v) => {
+      if (timer) clearTimeout(timer);
+      try { server.closeAllConnections(); } catch { /* ignore */ }
+      try { server.close(); } catch { /* ignore */ }
+      resolve(v);
+    };
+    timer = setTimeout(() => finish(null), 10 * 60 * 1000);
+    server.on("error", (e) => {
+      console.log("Port 3000 occupé ou réseau local bloqué (" + ((e && e.message) || e) + "). Libère le port puis réessaie.");
+      finish(null);
+    });
+    server.listen(AURA_LOGIN_PORT, "127.0.0.1", () => {
+      const url = `http://127.0.0.1:${AURA_LOGIN_PORT}/login`;
+      console.log("Ouvre cette page si le navigateur ne s'ouvre pas :\n" + url + "\n");
+      openBrowser(url);
+    });
+  });
+  return !!ok;
+}
+
+// Désinstallation propre : programme + entrée PATH, puis (option) données locales.
+// Exécutée dans un processus détaché car le script en cours ne peut pas toujours
+// s'auto-supprimer sous Windows. Ne touche JAMAIS au dossier projet courant.
+async function cmdUninstall() {
+  const dir = getInstallDir();
+  let hasInstall = false;
+  try { hasInstall = fs.existsSync(dir); } catch { /* ignore */ }
+  console.log(P.bold + P.pink + "Désinstaller AuraCode ?" + P.reset);
+  if (hasInstall) console.log("  Supprimé : " + dir + " (programme)");
+  else console.log("  (aucune installation programme trouvée : " + dir + ")");
+  console.log("  Retiré du PATH utilisateur (si présent).");
+  console.log("  Les conversations serveur sont conservées (compte intact).");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const askYN = (q) => new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
+  if (!(await askYN("Désinstaller le programme ?"))) { console.log("Annulé."); rl.close(); return; }
+  const wipeData = await askYN("Supprimer aussi les données locales (~/.auracode : réglages, historique, sessions) ?");
+  rl.close();
+  if (process.platform === "win32") {
+    const { spawn } = require("child_process");
+    console.log("Suppression en cours (tu peux fermer ce terminal)...");
+    spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(dir, wipeData)], { detached: true, stdio: "ignore" }).unref();
+  } else {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log("Dossier programme : " + e.message); }
+    console.log("(pense à retirer " + dir + " de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
+    if (wipeData) {
+      try { fs.rmSync(HOME, { recursive: true, force: true }); } catch (e) { console.log("Données : " + e.message); }
+    }
+  }
+  console.log("Désinstallé. Au revoir !");
+  setTimeout(() => process.exit(0), 800);
+}
+// cli/src/ui.js — affichage terminal : Screen, splash, modales, canvas.
+// Bundlé : symboles partagés fournis par shared.js (même portée finale).
+
+function adLine(W) {
+  const txt = aura13Locked() ? `✨ Aura 1.3 dans ${aura13Countdown()} — ${AURA13_LAUNCH_LABEL}` : "✨ Aura 1.3 est là — /model aura-1.3 !";
+  const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
+  return pad + P.bold + P.butter + txt + P.reset;
+}
+
+function brandLine(W) {
+  const plain = "Aura by VTH Group";
+  const pad = " ".repeat(Math.max(0, Math.floor((W - plain.length) / 2)));
+  return pad + P.bold + P.pink + "Aura" + P.reset + P.dim + " by " + P.reset + P.bold + P.sky + "VTH Group" + P.reset;
+}
+
+const PARTY_COLS = () => [P.pink, P.butter, P.mint, P.aqua, P.lavender, P.lilac, P.lemon, P.coral];
+const PARTY_CH = ["*", "+", "✦", "·", "•", "×"];
+const explodeRocket = (r, cols, chs) => {
+  const sparks = [];
+  const n = 8 + Math.floor(Math.random() * 7);
+  const col = cols[Math.floor(Math.random() * cols.length)];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 0.3 + Math.random() * 0.8;
+    sparks.push({ x: r.x, y: r.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.2, life: 8 + Math.floor(Math.random() * 9), col, ch: chs[Math.floor(Math.random() * chs.length)] });
+  }
+  return sparks;
+};
+async function runFireworks(screen, seconds = 7, title = "🎆 Aura 1.3 est là ! 🎆") {
+  if (!process.stdout.isTTY) return;
+  const W = process.stdout.columns || 80, H = process.stdout.rows || 24;
+  const cols = PARTY_COLS(), chs = PARTY_CH;
+  let rockets = [], sparks = [];
+  let stopped = false;
+  let cleanupKeys = null;
+  if (screen) {
+    screen.celebrating = true;
+  } else if (process.stdin.isTTY) {
+    try {
+      readline.emitKeypressEvents(process.stdin);
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      const onKey = () => { stopped = true; };
+      process.stdin.on("keypress", onKey);
+      cleanupKeys = () => {
+        try { process.stdin.removeListener("keypress", onKey); } catch { /* ignore */ }
+        try { if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* ignore */ }
+        try { process.stdin.pause(); } catch { /* ignore */ }
+      };
+    } catch { /* ignore */ }
+  }
+  const t0 = Date.now();
+  process.stdout.write("\x1b[?25l");
+  try {
+    while (!stopped && !(screen && !screen.celebrating) && Date.now() - t0 < seconds * 1000) {
+      if (rockets.length < 3 && Math.random() < 0.35) {
+        const left = Math.random() < 0.5;
+        rockets.push({ x: left ? 1 + Math.random() * 3 : W - 4 + Math.random() * 3, y: H - 1, vy: -(0.7 + Math.random() * 0.5), fuse: 6 + Math.floor(Math.random() * 6) });
+      }
+      const grid = Array.from({ length: H }, () => new Array(W).fill(" "));
+      const put = (x, y, s) => {
+        const xi = Math.round(x), yi = Math.round(y);
+        if (xi >= 0 && xi < W && yi >= 0 && yi < H) grid[yi][xi] = s;
+      };
+      const nextRockets = [];
+      for (const r of rockets) {
+        r.y += r.vy; r.fuse--;
+        if (r.fuse <= 0 || r.y < H * 0.2) sparks.push(...explodeRocket(r, cols, chs));
+        else { put(r.x, r.y, P.butter + "↑" + P.reset); nextRockets.push(r); }
+      }
+      rockets = nextRockets;
+      sparks = sparks.filter((p) => p.life > 0 && p.y < H && p.x > -2 && p.x < W + 2);
+      for (const p of sparks) {
+        p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--;
+        put(p.x, p.y, (p.life < 4 ? P.dim : p.col) + p.ch + P.reset);
+      }
+      const ti = Math.floor(W / 2 - title.length / 2);
+      for (let i = 0; i < title.length && ti + i < W; i++) {
+        if (ti + i >= 0) grid[Math.floor(H / 2)][ti + i] = P.bold + P.butter + title[i] + P.reset;
+      }
+      process.stdout.write("\x1b[H" + grid.map((row) => row.join("")).join("\n"));
+      await sleep(110);
+    }
+  } finally {
+    if (screen) screen.celebrating = false;
+    if (cleanupKeys) cleanupKeys();
+    process.stdout.write("\x1b[?25h");
+  }
+}
+
+async function splash() {
+  // Écran de lancement plein écran : logo centré + vérification auto des mises à jour.
+  // Retourne : version dispo (string), null (à jour), undefined (hors ligne).
+  if (!process.stdout.isTTY) {
+    console.log(`AuraCode v${PKG.version}`);
+    return checkUpdate();
+  }
+  const W = process.stdout.columns || 80;
+  const H = process.stdout.rows || 24;
+  const center = (text, color) => {
+    const pad = " ".repeat(Math.max(0, Math.floor((W - text.length) / 2)));
+    return pad + (color ? P[color] + text + P.reset : text);
+  };
+  const block = [
+    ...ART_LINES.map((ln, i) => center(ln, ART_COLORS[i % ART_COLORS.length])),
+    center("L'IA qui pilote ton PC — propulsée par le cloud VTH", "sky"),
+    "",
+    center(`v${PKG.version}`, "dim"),
+    center(`build ${buildId()}`, "dim"),
+    "",
+  ];
+  block.splice(block.length - 1, 0, brandLine(W));
+  block.splice(block.length - 1, 0, adLine(W));
+  const topPad = Math.max(0, Math.floor((H - block.length - 1) / 2));
+  const statusRow = topPad + block.length + 1;
+  process.stdout.write("\x1b[?25l\x1b[2J\x1b[H");
+  process.stdout.write("\n".repeat(topPad));
+  for (const ln of block) process.stdout.write(ln + "\n");
+  const setStatus = (txt, color, rowOff = 0) => {
+    const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
+    process.stdout.write(`\x1b[${statusRow + rowOff};1H\x1b[K` + pad + (color ? P[color] + txt + P.reset : txt));
+  };
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const BAR_W = 26;
+  const bar = (p) => "█".repeat(Math.round(p * BAR_W)) + "─".repeat(BAR_W - Math.round(p * BAR_W));
+  // Phase 1 (2 s) : connexion au cloud VTH + barre de progression.
+  const healthP = fetch(API + "/health", { signal: AbortSignal.timeout(5000) }).then((r) => r.ok).catch(() => false);
+  const t0 = Date.now();
+  await new Promise((res) => {
+    const iv = setInterval(() => {
+      const p = Math.min(1, (Date.now() - t0) / 2000);
+      const fi = Math.floor(Date.now() / 80) % frames.length;
+      setStatus(`${frames[fi]} Connexion au cloud VTH  ${bar(p)}`, "lavender", 0);
+      if (p >= 1) { clearInterval(iv); res(); }
+    }, 50);
+  });
+  const cloudOk = await healthP;
+  setStatus(cloudOk ? "✓ Connecté au cloud VTH" : "… Cloud injoignable — vérifie ta connexion", cloudOk ? "mint" : "peach", 0);
+  // Phase 2 (2 s) : vérification des mises à jour.
+  let latest = undefined, done = false;
+  const t1 = Date.now();
+  checkUpdate().then((v) => { latest = v; done = true; });
+  await new Promise((res) => {
+    const iv = setInterval(() => {
+      if (done && Date.now() - t1 >= 2000) { clearInterval(iv); res(); return; }
+      const fi = Math.floor(Date.now() / 80) % frames.length;
+      setStatus(`${frames[fi]} Vérification des mises à jour…`, "lavender", 1);
+    }, 80);
+  });
+  if (latest === undefined) setStatus("? Impossible de vérifier (hors ligne ?)", "peach", 1);
+  else if (latest) setStatus(`↓ Mise à jour ${latest} disponible — tape /update dans le chat`, "lemon", 1);
+  else setStatus(`✓ À jour (v${PKG.version})`, "mint", 1);
+  await sleep(900);
+  process.stdout.write("\x1b[?25h");
+  return latest;
+}
+
+function choose(prompt, options) {
+  const pickNumbered = () => new Promise((resolve) => {
+    console.log(pastel("lavender", "◆ " + prompt));
+    options.forEach((o, i) => console.log(`  ${i + 1}. ${o.label}${o.desc ? "  —  " + o.desc : ""}`));
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("Numéro : ", (a) => {
+      rl.close();
+      const n = parseInt(a.trim(), 10);
+      resolve(n >= 1 && n <= options.length ? options[n - 1].value : null);
+    });
+  });
+  if (!process.stdin.isTTY) return pickNumbered();
+  return new Promise((resolve) => {
+    let idx = 0;
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    const render = () => {
+      console.clear();
+      console.log(P.bold + P.lavender + "◆ " + prompt + P.reset + "\n");
+      options.forEach((o, i) => {
+        const active = i === idx;
+        const prefix = active ? pastel("pink", "❯ ") : "  ";
+        const name = active ? P.bold + P.lemon + o.label + P.reset : P.dim + o.label + P.reset;
+        console.log(prefix + name + (o.desc ? P.dim + "  —  " + o.desc + P.reset : ""));
+      });
+      console.log("\n" + P.dim + "↑↓ naviguer • Entrée valider • Échap annuler" + P.reset);
+    };
+    const cleanup = () => {
+      process.stdin.removeListener("keypress", onKey);
+      if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    };
+    const onKey = (str, key) => {
+      if (key.name === "up") { idx = (idx - 1 + options.length) % options.length; render(); }
+      else if (key.name === "down") { idx = (idx + 1) % options.length; render(); }
+      else if (key.name === "return") { cleanup(); console.clear(); resolve(options[idx].value); }
+      else if (key.name === "escape" || (key.ctrl && key.name === "c")) { cleanup(); console.clear(); resolve(null); }
+    };
+    process.stdin.on("keypress", onKey);
+    render();
+  });
+}
+
+// ---------- Écran d'installation ----------
+async function cmdSetup() {
+  console.clear();
+  pastelBox("Bienvenue dans AuraCode — installation", [
+    pastel("sky", "Configuration en 3 étapes, couleurs pastel incluses."),
+    "",
+  ]);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const askLine = (q) => new Promise((res) => rl.question(P.sky + "◆ " + q + P.reset + " ", res));
+
+  // 1. Clé API (mémoire seule : jamais stockée, login à chaque lancement)
+  console.log("\n" + pastel("lavender", "◆ Étape 1/3 — Colle ta clé API (ak-vth-... depuis https://auth.vth-mc.fr/profile)"));
+  const key = (await askLine("Clé :")).trim();
+  if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
+  memApiKey = key;
+
+  // 2. Modèle (avec stats visibles)
+  console.log("");
+  const model = await choose("Étape 2/3 — Choisis ton modèle", [
+    { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
+    { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
+    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM) • 🔒 dim. 18 oct. 17h" },
+    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
+  ]);
+  if (!model) { console.log("Annulé."); rl.close(); return; }
+
+  // 3. Effort (avec temps et coût visibles)
+  console.log("");
+  const effort = (await choose("Étape 3/3 — Niveau de réflexion", [
+    { value: "low", label: "Low", desc: "~5-10s • 256 tokens • coût x1 • réponses courtes" },
+    { value: "middle", label: "Middle", desc: "~15-30s • 512 tokens • coût x1 • équilibré" },
+    { value: "high", label: "High", desc: "~1-2 min • 1024 tokens • coût x1.5 • détaillé" },
+    { value: "xhigh", label: "XHigh", desc: "~2-4 min • 1536 tokens • coût x2 • réflexion maximale" },
+  ])) || "middle";
+
+  const cfg = loadJson(CONFIG_FILE, {});
+  cfg.model = model; cfg.effort = effort;
+  saveJson(CONFIG_FILE, cfg);
+  rl.close();
+
+  console.log("\n" + pastel("sky", "◆ Test de connexion au cloud..."));
+  try {
+    const me = await api("/api/me", null, key, "GET");
+    console.log(pastel("mint", `✓ Connecté ! ${me.sessions || 0} discussion(s) sur ton compte.`));
+  } catch (e) {
+    console.log(pastel("pink", "✗ Échec : " + e.message + " (vérifie ta clé)"));
+    return;
+  }
+  pastelBox("Installation terminée ✓", [
+    `Modèle par défaut : ${pastel("lemon", model)}   Effort : ${pastel("lemon", effort)}`,
+    "",
+    "Lance " + P.bold + "auracode" + P.reset + " pour discuter avec ton PC.",
+  ]);
+}
+
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conv" },
@@ -1264,28 +1402,6 @@ const COMMANDS = [
   { name: "/exit", desc: "Quitter" },
 ];
 
-const timeStr = () => {
-  try { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
-  catch { return ""; }
-};
-
-function wrapText(text, width) {
-  const out = [];
-  for (const para of String(text).split("\n")) {
-    if (para === "") { out.push(""); continue; }
-    let line = para;
-    while (line.length > width) {
-      let cut = line.lastIndexOf(" ", width);
-      if (cut <= 0) cut = width;
-      out.push(line.slice(0, cut));
-      line = line.slice(cut).replace(/^ +/, "");
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-// ---------- Écran plein terminal ----------
 class Screen {
   constructor(state, updateAvailable) {
     this.state = state;
@@ -1959,6 +2075,8 @@ class Screen {
     }
   }
 }
+// cli/src/main.js — commandes CLI, runTUI, boucle principale.
+// Bundlé : symboles partagés fournis par shared/backend/ui (même portée finale).
 
 async function runTUI(state, updateAvailable) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -3180,112 +3298,6 @@ async function runTUI(state, updateAvailable) {
 
 // Login OAuth : serveur local http://127.0.0.1:3000/login -> VTH authorize
 // -> callback locale -> échange via le VPS (la clé privée ne quitte jamais le serveur).
-async function cmdLoginOAuth() {
-  const http = require("http");
-  const state = newState32();
-  let used = false;
-  let finish = null;
-  let timer = null;
-  const page = (title, body) => `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>${title}</title></head><body style="font-family:system-ui,sans-serif;background:#f5f2eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0"><div style="background:#fff;border-radius:16px;padding:40px 48px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.08);max-width:420px"><h1 style="margin:0 0 8px">AuraCode</h1><p style="color:#666">${body}</p></div></body></html>`;
-  const server = http.createServer(async (req, res) => {
-    try {
-      const u = new URL(req.url || "/", "http://127.0.0.1");
-      if (u.pathname === "/login") {
-        const authUrl = vthAuthorizeUrl(state);
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(page("AuraCode — Connexion", `Connecte-toi avec ton compte VTH.<br><br><a href="${authUrl.replace(/&/g, "&amp;")}" style="display:inline-block;background:#c15f3c;color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600">Se connecter avec VTH</a>`));
-        return;
-      }
-      if (u.pathname === "/auracode/auth/callback") {
-        const st = u.searchParams.get("state") || "";
-        const code = u.searchParams.get("secretCode") || "";
-        const same = st.length > 0 && st.length === state.length && crypto.timingSafeEqual(Buffer.from(st), Buffer.from(state));
-        if (used || !same || !code) {
-          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(page("Échec", "Session invalide ou expirée. Relance <code>auracode login</code> dans ton terminal."));
-          finish(null);
-          return;
-        }
-        used = true;
-        try {
-          const r = await fetch(API + "/api/auth/exchange", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code }),
-          });
-          const j = await r.json().catch(() => ({}));
-          if (!j.access_token) throw new Error(j.error || ("HTTP " + r.status));
-          saveVth({ access_token: j.access_token, refresh_token: j.refresh_token || null, obtained_at: Date.now() });
-          vthCurrent = j.access_token;
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(page("Connecté ✓", "Ton compte VTH est lié. Retourne dans ton terminal, c'est prêt."));
-          finish(true);
-        } catch (e) {
-          res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(page("Échec", "Échange impossible : " + String((e && e.message) || e)));
-          finish(null);
-        }
-        return;
-      }
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("?");
-    } catch {
-      try { res.writeHead(500); res.end("?"); } catch { /* ignore */ }
-    }
-  });
-  const ok = await new Promise((resolve) => {
-    finish = (v) => {
-      if (timer) clearTimeout(timer);
-      try { server.closeAllConnections(); } catch { /* ignore */ }
-      try { server.close(); } catch { /* ignore */ }
-      resolve(v);
-    };
-    timer = setTimeout(() => finish(null), 10 * 60 * 1000);
-    server.on("error", (e) => {
-      console.log("Port 3000 occupé ou réseau local bloqué (" + ((e && e.message) || e) + "). Libère le port puis réessaie.");
-      finish(null);
-    });
-    server.listen(AURA_LOGIN_PORT, "127.0.0.1", () => {
-      const url = `http://127.0.0.1:${AURA_LOGIN_PORT}/login`;
-      console.log("Ouvre cette page si le navigateur ne s'ouvre pas :\n" + url + "\n");
-      openBrowser(url);
-    });
-  });
-  return !!ok;
-}
-
-// Désinstallation propre : programme + entrée PATH, puis (option) données locales.
-// Exécutée dans un processus détaché car le script en cours ne peut pas toujours
-// s'auto-supprimer sous Windows. Ne touche JAMAIS au dossier projet courant.
-async function cmdUninstall() {
-  const dir = getInstallDir();
-  let hasInstall = false;
-  try { hasInstall = fs.existsSync(dir); } catch { /* ignore */ }
-  console.log(P.bold + P.pink + "Désinstaller AuraCode ?" + P.reset);
-  if (hasInstall) console.log("  Supprimé : " + dir + " (programme)");
-  else console.log("  (aucune installation programme trouvée : " + dir + ")");
-  console.log("  Retiré du PATH utilisateur (si présent).");
-  console.log("  Les conversations serveur sont conservées (compte intact).");
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const askYN = (q) => new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
-  if (!(await askYN("Désinstaller le programme ?"))) { console.log("Annulé."); rl.close(); return; }
-  const wipeData = await askYN("Supprimer aussi les données locales (~/.auracode : réglages, historique, sessions) ?");
-  rl.close();
-  if (process.platform === "win32") {
-    const { spawn } = require("child_process");
-    console.log("Suppression en cours (tu peux fermer ce terminal)...");
-    spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", uninstallCmds(dir, wipeData)], { detached: true, stdio: "ignore" }).unref();
-  } else {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log("Dossier programme : " + e.message); }
-    console.log("(pense à retirer " + dir + " de ton PATH shell : ~/.bashrc, ~/.zshrc...)");
-    if (wipeData) {
-      try { fs.rmSync(HOME, { recursive: true, force: true }); } catch (e) { console.log("Données : " + e.message); }
-    }
-  }
-  console.log("Désinstallé. Au revoir !");
-  setTimeout(() => process.exit(0), 800);
-}
-
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(`${PKG.version} (build ${buildId()})`); return; }

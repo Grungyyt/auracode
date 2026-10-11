@@ -5,7 +5,8 @@
   "bin": {
     "auracode": "./bin/auracode.js"
   },
-  "files": ["bin/"],
+  "files": ["bin/", "src/"],
+  "scripts": { "build": "node ../scripts/bundle.js" },
   "engines": {
     "node": ">=18"
   },
