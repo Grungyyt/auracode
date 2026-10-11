@@ -385,7 +385,9 @@ async function runTUI(state, updateAvailable) {
           if (!arg) { screen.sys("Usage : /open <chemin>"); return; }
           try {
             const res = await TOOLS.open_file.run({ path: arg }, {
-              confirm: (q) => screen.confirm(q),
+              confirm: (q, always) => screen.confirm(q, always),
+      permitted: (n) => !!(screen.permits || {})[n],
+      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; },
               sys: (t) => screen.sys(t),
             });
             screen.sys(res);
@@ -497,8 +499,8 @@ async function runTUI(state, updateAvailable) {
         case "notes": {
           const arr = loadList(NOTES_FILE);
           if (!arr.length) { screen.sys("Aucune note. /note <texte> pour ajouter."); return; }
-          screen.sys(`${arr.length} note(s) :`);
-          arr.slice(-15).forEach((n, i) => screen.sys(`  ${i + 1}. ${n.text}`));
+          const rows = [`🗒 Notes (${arr.length})`, ...arr.slice(-10).map((n, i) => `  ${i + 1}. ${String(n.text).slice(0, 60)}`)];
+          screen.tool("notes", true, null, rows.join("\n"));
           return;
         }
         case "unnote": {
@@ -521,7 +523,9 @@ async function runTUI(state, updateAvailable) {
         case "todos": {
           const arr = loadList(TODOS_FILE);
           if (!arr.length) { screen.sys("Rien à faire. /todo <texte> pour ajouter."); return; }
-          arr.slice(-15).forEach((x, i) => screen.sys(`  ${i + 1}. [${x.done ? "x" : " "}] ${x.text}`));
+          const rows = [`☑ Todos (${arr.filter((x) => x.done).length}/${arr.length})`];
+          arr.slice(-10).forEach((x, i) => rows.push(`  ${x.done ? "☑" : "☐"} ${i + 1}. ${String(x.text).slice(0, 55)}`));
+          screen.tool("todos", true, null, rows.join("\n"));
           return;
         }
         case "todook": {
@@ -1169,7 +1173,9 @@ async function runTUI(state, updateAvailable) {
       sys: (t, dim) => screen.sys(t),
       assistant: (t) => screen.assistant(t),
       thinking: (s) => screen.thinking(s),
-      confirm: (q) => screen.confirm(q),
+      confirm: (q, always) => screen.confirm(q, always),
+      permitted: (n) => !!(screen.permits || {})[n],
+      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; },
       tool: (name, ok, ms, output) => screen.tool(name, ok, ms, output),
       cancelled: () => screen.cancelled,
       signal: screen.abort.signal,

@@ -234,7 +234,9 @@ const TOOLS = {
         ui.sys(`--- ${old ? "Diff" : "Nouveau fichier"} ${p} (${(content || "").length} caractères) ---`);
         (old ? diffLines(old, content || "").split("\n").slice(0, 25) : String(content || "").split("\n").slice(0, 25)).forEach((l) => ui.sys(l || " "));
         ui.sys("--- fin aperçu ---");
-      if (!(await ui.confirm("Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
+      let okW = ui.permitted && ui.permitted("write_file") ? true : await ui.confirm("Écrire ce fichier ?", !!(ui && ui.permit));
+      if (okW === "always" && ui.permit) { ui.permit("write_file"); okW = true; }
+      if (!okW) return "Annulé par l'utilisateur.";
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content || "");
       return "Fichier écrit : " + p;
@@ -244,7 +246,9 @@ const TOOLS = {
     desc: "Exécute une commande shell (demande confirmation). Args: {cmd}",
     run: (args, ui) => new Promise(async (resolve) => {
       ui.sys("$ " + args.cmd);
-      if (!(await ui.confirm("Exécuter ?"))) return resolve("Annulé par l'utilisateur.");
+      let okE = ui.permitted && ui.permitted("exec") ? true : await ui.confirm("Exécuter ?", !!(ui && ui.permit));
+      if (okE === "always" && ui.permit) { ui.permit("exec"); okE = true; }
+      if (!okE) return resolve("Annulé par l'utilisateur.");
       exec(args.cmd, { cwd: process.cwd(), timeout: 60000, maxBuffer: 1024 * 500 }, (err, stdout, stderr) => {
         let out = (stdout || "") + (stderr ? "\n[stderr]\n" + stderr : "");
         if (err && !out) out = "Erreur: " + err.message;
@@ -281,7 +285,9 @@ const TOOLS = {
       const abs = inside(p);
       const plat = process.platform;
       const cmd = plat === "win32" ? `start "" "${abs}"` : plat === "darwin" ? `open "${abs}"` : `xdg-open "${abs}"`;
-      if (!(await ui.confirm(`Ouvrir ${p} ?`))) return "Annulé par l'utilisateur.";
+      let okO = ui.permitted && ui.permitted("open_file") ? true : await ui.confirm(`Ouvrir ${p} ?`, !!(ui && ui.permit));
+      if (okO === "always" && ui.permit) { ui.permit("open_file"); okO = true; }
+      if (!okO) return "Annulé par l'utilisateur.";
       await new Promise((resolve, reject) =>
         exec(cmd, { timeout: 15000 }, (e) => (e ? reject(e) : resolve(null))));
       return "Ouvert : " + p;

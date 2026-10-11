@@ -12,7 +12,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.0" };
+const PKG = { version: "1.3.0.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -59,6 +59,7 @@ const THEMES = {
   sunset: { pink: "\x1b[38;2;255;107;107m", mint: "\x1b[38;2;255;209;102m", lavender: "\x1b[38;2;244;162;97m", peach: "\x1b[38;2;231;111;81m", sky: "\x1b[38;2;233;196;106m", lemon: "\x1b[38;2;244;162;97m", dim: "\x1b[38;2;150;150;150m", lilac: "\x1b[38;2;255;158;181m", aqua: "\x1b[38;2;255;200;130m", butter: "\x1b[38;2;255;220;130m", coral: "\x1b[38;2;255;120;110m" },
   ocean: { pink: "\x1b[38;2;72;202;228m", mint: "\x1b[38;2;144;224;239m", lavender: "\x1b[38;2;119;141;169m", peach: "\x1b[38;2;100;223;223m", sky: "\x1b[38;2;0;187;249m", lemon: "\x1b[38;2;128;255;219m", dim: "\x1b[38;2;140;140;140m", lilac: "\x1b[38;2;180;160;255m", aqua: "\x1b[38;2;120;240;255m", butter: "\x1b[38;2;190;255;220m", coral: "\x1b[38;2;120;220;230m" },
   mono: { pink: "\x1b[37m", mint: "\x1b[37m", lavender: "\x1b[37m", peach: "\x1b[37m", sky: "\x1b[37m", lemon: "\x1b[37m", dim: "\x1b[90m", lilac: "\x1b[37m", aqua: "\x1b[37m", butter: "\x1b[37m", coral: "\x1b[37m" },
+  opencode: { pink: "\x1b[38;2;255;95;86m", mint: "\x1b[38;2;80;200;120m", lavender: "\x1b[38;2;150;160;180m", peach: "\x1b[38;2;255;150;100m", sky: "\x1b[38;2;120;170;220m", lemon: "\x1b[38;2;230;220;170m", dim: "\x1b[38;2;130;135;145m", lilac: "\x1b[38;2;180;150;220m", aqua: "\x1b[38;2;100;200;210m", butter: "\x1b[38;2;220;200;130m", coral: "\x1b[38;2;255;110;100m" },
 };
 
 function loadJson(p, fallback) {

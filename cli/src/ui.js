@@ -268,7 +268,7 @@ const COMMANDS = [
   { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
-  { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono"] },
+  { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono", "opencode"] },
   { name: "/sessions", desc: "Panneau des conversations (F2)" },
   { name: "/account", desc: "Panneau du compte (F3)" },
   { name: "/retry", desc: "Relancer la dernière réponse" },
@@ -410,6 +410,7 @@ class Screen {
     this.abort = null;
     this.typingMsg = null;
     this.undoStack = [];
+    this.permits = {};
     this.done = null;
     this.onLine = null;
     this.typeTimer = null;
@@ -486,10 +487,17 @@ class Screen {
     this.render();
   }
 
-  openModal(title, items, onPick) {
-    this.modal = { title, items: items || [], sel: 0, onPick };
+  openModal(title, items, onPick, filterable = false) {
+    this.modal = { title, items: items || [], sel: 0, onPick, filter: "", filterable: !!filterable };
     this.completion = null;
     this.render();
+  }
+
+  modalItems() {
+    const m = this.modal;
+    if (!m || !m.filterable || !m.filter) return (m && m.items) || [];
+    const f = m.filter.toLowerCase();
+    return m.items.filter((it) => String(it.label || "").toLowerCase().includes(f));
   }
 
   openPalette() {
@@ -623,9 +631,9 @@ class Screen {
     this.render();
   }
 
-  confirm(q) {
+  confirm(q, allowAlways = false) {
     return new Promise((resolve) => {
-      this.confirmState = { q: String(q), resolve };
+      this.confirmState = { q: String(q), resolve, always: !!allowAlways };
       this.render();
     });
   }
@@ -675,32 +683,73 @@ class Screen {
         const icol = m.ok ? P.mint : P.pink;
         const icon = m.ok ? "✓" : "✗";
         const nOut = String(m.output || "").split("\n").length;
-        push("", ` ${icol}⚙ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""} ${P.dim}· ${nOut}l${P.reset}`);
+        push("", ` ${icol}⏺ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""} ${P.dim}· ${nOut}l${P.reset}`);
         const outs = String(m.output || "").split("\n").slice(0, 12);
         for (const ol of outs) {
-          const t = ol.slice(0, Math.max(20, W - 10));
-          push("  " + t, P.dim + "  " + t + P.reset);
+          const t = ol.slice(0, Math.max(20, W - 12));
+          push("  " + t, P.dim + "  ⎿ " + P.reset + P.dim + t + P.reset);
         }
         const rest = String(m.output || "").split("\n").length - outs.length;
-        if (rest > 0) push("", P.dim + `  … +${rest} lignes` + P.reset);
+        if (rest > 0) push("", P.dim + `  ⎿ … +${rest} lignes` + P.reset);
         push("", "");
         continue;
       }
       const mine = m.role === "user";
       const nameColor = mine ? P.sky : P.mint;
       const border = mine ? P.pink : P.mint;
+      const segParts = [];
+      if (!mine) {
+        const re = /```(\w*)\n([\s\S]*?)```/g;
+        let last = 0, mm;
+        let hasCode = false;
+        while ((mm = re.exec(m.text || ""))) {
+          hasCode = true;
+          if (mm.index > last) segParts.push({ t: "text", s: m.text.slice(last, mm.index) });
+          segParts.push({ t: "code", lang: (mm[1] || "").toLowerCase(), s: mm[2].replace(/\n$/, "") });
+          last = mm.index + mm[0].length;
+        }
+        if (hasCode && last < (m.text || "").length) segParts.push({ t: "text", s: m.text.slice(last) });
+      }
+      if (!segParts.length) segParts.push({ t: "text", s: m.text });
       const wrapped = [];
-      for (const wl of wrapText(m.text, innerW)) wrapped.push(wl);
-      if (!wrapped.length) wrapped.push("");
-      const bw = Math.min(innerW, Math.max(...wrapped.map((l) => l.length)));
+      for (const sg of segParts) {
+        if (sg.t === "code") {
+          wrapped.push({ fence: true, lang: sg.lang, line: "" });
+          for (const wl of wrapText(sg.s, innerW)) wrapped.push({ fence: true, lang: sg.lang, line: wl });
+          wrapped.push({ fence: true, lang: sg.lang, line: null });
+        } else {
+          for (const wl of wrapText(sg.s, innerW)) wrapped.push({ fence: false, line: wl });
+        }
+      }
+      if (!wrapped.length) wrapped.push({ fence: false, line: "" });
+      const bw = Math.min(innerW, Math.max(...wrapped.map((l) => (l.line || "").length)));
       const padEnd = (s) => s + " ".repeat(Math.max(0, bw - s.length));
       const top = "╭" + "─".repeat(bw + 2) + "╮";
       const bot = "╰" + "─".repeat(bw + 2) + "╯";
       const headPlain = `${mine ? "Toi" : "Aura"} • ${m.time || ""}`;
       const headOut = nameColor + P.bold + (mine ? "Toi" : "Aura") + P.reset + P.dim + ` • ${m.time || ""}` + P.reset;
-      const rowsV = [headPlain, top, ...wrapped.map((wl) => `│ ${padEnd(wl)} │`), bot];
+      const rowsV = [headPlain, top];
       const fmt = (wl) => (m.role === "assistant" ? mdInline(wl) : wl);
-      const rowsO = [headOut, border + top + P.reset, ...wrapped.map((wl) => border + "│ " + P.reset + fmt(padEnd(wl)) + border + " │" + P.reset), border + bot + P.reset];
+      const rowsO = [headOut, border + top + P.reset];
+      for (const w of wrapped) {
+        if (w.fence && w.line === "") {
+          const lbl = "◈ " + (w.lang || "code");
+          rowsV.push(`│ ${padEnd(lbl)} │`);
+          rowsO.push(border + "│ " + P.reset + P.bold + P.lavender + padEnd(lbl) + P.reset + border + " │" + P.reset);
+        } else if (w.fence && w.line === null) {
+          rowsV.push(bot);
+          rowsO.push(border + bot + P.reset);
+        } else if (w.fence) {
+          rowsV.push(`│ ${padEnd(w.line)} │`);
+          rowsO.push(border + "│ " + P.reset + P.lemon + padEnd(w.line) + P.reset + border + " │" + P.reset);
+        } else {
+          const wl = w.line;
+          rowsV.push(`│ ${padEnd(wl)} │`);
+          rowsO.push(border + "│ " + P.reset + fmt(padEnd(wl)) + border + " │" + P.reset);
+        }
+      }
+      rowsV.push(bot, "");
+      rowsO.push(border + bot + P.reset, "");
       if (m.meta && !mine) {
         const meta = `${m.time || ""} · ${(m.meta.ms || 0).toFixed(1)}s · ~${m.meta.tok || 0} tok`;
         rowsV.push("  " + meta, "");
@@ -749,7 +798,8 @@ class Screen {
       mRows.push(P.dim + "╭" + "─".repeat(mw - 2) + "╮" + P.reset);
       mRows.push(P.dim + "│ " + P.reset + P.bold + P.pink + fit("◆ " + this.modal.title) + P.reset + P.dim + " │" + P.reset);
       mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
-      const mItems = this.modal.items.slice(0, Math.max(1, viewH - 6));
+      const list = this.modalItems();
+      const mItems = list.slice(0, Math.max(1, viewH - 6));
       mItems.forEach((it, i) => {
         const txt = ((i === this.modal.sel ? "❯ " : "  ") + (it.label || "")).slice(0, iw);
         const colored = i === this.modal.sel
@@ -757,7 +807,9 @@ class Screen {
           : P.dim + txt + P.reset;
         mRows.push(P.dim + "│ " + P.reset + colored + " ".repeat(Math.max(0, iw - Math.min(txt.length, iw))) + P.dim + " │" + P.reset);
       });
-      const foot = `${kbd("↑↓")} choisir   ${kbd("Entrée")} valider   ${kbd("Échap")} fermer`;
+      const fpieces = [`${kbd("↑↓")} choisir`, `${kbd("Entrée")} valider`, `${kbd("Échap")} fermer`];
+      if (this.modal.filterable) fpieces.push(this.modal.filter ? `filtre : ${this.modal.filter}` : "taper pour filtrer");
+      const foot = fpieces.join("   ");
       const footPlain = stripAnsi(foot);
       const footPad = Math.max(0, Math.floor((iw - footPlain.length) / 2));
       mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
@@ -809,7 +861,9 @@ class Screen {
     let cursorCol = -1, cursorRowOff = 0;
     if (this.confirmState) {
       const q = (`? ${this.confirmState.q}`).slice(0, W - 12);
-      out += "│ " + P.lemon + q + P.reset + " " + kbd("o") + " " + kbd("N") + " ".repeat(Math.max(0, W - 4 - q.length - 8)) + " │" + "\x1b[K\n";
+      const chips = this.confirmState.always ? " " + kbd("o") + " " + kbd("t") + " " + kbd("N") : " " + kbd("o") + " " + kbd("N");
+      const chipLen = this.confirmState.always ? 12 : 8;
+      out += "│ " + P.lemon + q + P.reset + chips + " ".repeat(Math.max(0, W - 4 - q.length - chipLen)) + " │" + "\x1b[K\n";
     } else {
       const inLen = this.input.length;
       let boxTitle = `─ Écris ton message… (${inLen}) ── Ctrl+J ligne, @fichier `;
@@ -850,6 +904,12 @@ class Screen {
       rParts.push(`⏱ ${mm}:${ss} ${this.timer.label}`);
     }
     if (this.serve) rParts.push(`srv:${this.servePort}`);
+    let tokSum = 0;
+    for (const m of this.messages) {
+      if (m.meta && m.meta.tok) tokSum += m.meta.tok;
+      else if (m.role === "user" || m.role === "assistant") tokSum += Math.round(String(m.text || "").length / 4);
+    }
+    if (tokSum > 0) rParts.push(`~${tokSum >= 1000 ? (tokSum / 1000).toFixed(1) + "k" : tokSum} tok`);
     rParts.push(this.quotaText, br ? `⎇ ${br}` : "", cwd);
     sR = rParts.filter(Boolean).join(" • ");
     if (this.scroll > 0) sR += (sR ? " • " : "") + "PgDn : bas";
@@ -980,11 +1040,12 @@ class Screen {
     if (key.name === "pagedown") { this.stuck = false; this.scroll = Math.max(0, this.scroll - 5); this.render(); return; }
     if (this.celebrating) { this.celebrating = false; return; }
     if (this.modal) {
-      const n = this.modal.items.length || 1;
+      const list = this.modalItems();
+      const n = list.length || 1;
       if (key.name === "up") { this.modal.sel = (this.modal.sel - 1 + n) % n; this.render(); return; }
       if (key.name === "down") { this.modal.sel = (this.modal.sel + 1) % n; this.render(); return; }
       if (key.name === "return" || key.name === "tab") {
-        const it = this.modal.items[this.modal.sel];
+        const it = list[Math.min(this.modal.sel, list.length - 1)];
         const cb = this.modal.onPick;
         this.modal = null;
         if (cb) cb(it ? it.value : null);
@@ -992,10 +1053,23 @@ class Screen {
         return;
       }
       if (key.name === "escape") {
+        if (this.modal.filter) { this.modal.filter = ""; this.modal.sel = 0; this.render(); return; }
         const cb = this.modal.onPick;
         this.modal = null;
         if (cb) cb(null);
         else this.render();
+        return;
+      }
+      if (this.modal.filterable && str && str.length === 1 && !key.ctrl && !key.meta && str >= " ") {
+        this.modal.filter += str;
+        this.modal.sel = 0;
+        this.render();
+        return;
+      }
+      if (this.modal.filterable && key.name === "backspace" && this.modal.filter) {
+        this.modal.filter = this.modal.filter.slice(0, -1);
+        this.modal.sel = 0;
+        this.render();
         return;
       }
       return;
@@ -1007,6 +1081,7 @@ class Screen {
     if (this.confirmState) {
       const c = (str || "").toLowerCase();
       if (c === "y" || c === "o") this.resolveConfirm(true);
+      else if (c === "t" && this.confirmState.always) this.resolveConfirm("always");
       else if (c === "n" || key.name === "escape" || key.name === "return") this.resolveConfirm(false);
       return;
     }

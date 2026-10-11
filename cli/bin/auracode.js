@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.3.0.0" };
+const PKG = { version: "1.3.0.1" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -66,6 +66,7 @@ const THEMES = {
   sunset: { pink: "\x1b[38;2;255;107;107m", mint: "\x1b[38;2;255;209;102m", lavender: "\x1b[38;2;244;162;97m", peach: "\x1b[38;2;231;111;81m", sky: "\x1b[38;2;233;196;106m", lemon: "\x1b[38;2;244;162;97m", dim: "\x1b[38;2;150;150;150m", lilac: "\x1b[38;2;255;158;181m", aqua: "\x1b[38;2;255;200;130m", butter: "\x1b[38;2;255;220;130m", coral: "\x1b[38;2;255;120;110m" },
   ocean: { pink: "\x1b[38;2;72;202;228m", mint: "\x1b[38;2;144;224;239m", lavender: "\x1b[38;2;119;141;169m", peach: "\x1b[38;2;100;223;223m", sky: "\x1b[38;2;0;187;249m", lemon: "\x1b[38;2;128;255;219m", dim: "\x1b[38;2;140;140;140m", lilac: "\x1b[38;2;180;160;255m", aqua: "\x1b[38;2;120;240;255m", butter: "\x1b[38;2;190;255;220m", coral: "\x1b[38;2;120;220;230m" },
   mono: { pink: "\x1b[37m", mint: "\x1b[37m", lavender: "\x1b[37m", peach: "\x1b[37m", sky: "\x1b[37m", lemon: "\x1b[37m", dim: "\x1b[90m", lilac: "\x1b[37m", aqua: "\x1b[37m", butter: "\x1b[37m", coral: "\x1b[37m" },
+  opencode: { pink: "\x1b[38;2;255;95;86m", mint: "\x1b[38;2;80;200;120m", lavender: "\x1b[38;2;150;160;180m", peach: "\x1b[38;2;255;150;100m", sky: "\x1b[38;2;120;170;220m", lemon: "\x1b[38;2;230;220;170m", dim: "\x1b[38;2;130;135;145m", lilac: "\x1b[38;2;180;150;220m", aqua: "\x1b[38;2;100;200;210m", butter: "\x1b[38;2;220;200;130m", coral: "\x1b[38;2;255;110;100m" },
 };
 
 function loadJson(p, fallback) {
@@ -768,7 +769,9 @@ const TOOLS = {
         ui.sys(`--- ${old ? "Diff" : "Nouveau fichier"} ${p} (${(content || "").length} caractères) ---`);
         (old ? diffLines(old, content || "").split("\n").slice(0, 25) : String(content || "").split("\n").slice(0, 25)).forEach((l) => ui.sys(l || " "));
         ui.sys("--- fin aperçu ---");
-      if (!(await ui.confirm("Écrire ce fichier ?"))) return "Annulé par l'utilisateur.";
+      let okW = ui.permitted && ui.permitted("write_file") ? true : await ui.confirm("Écrire ce fichier ?", !!(ui && ui.permit));
+      if (okW === "always" && ui.permit) { ui.permit("write_file"); okW = true; }
+      if (!okW) return "Annulé par l'utilisateur.";
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content || "");
       return "Fichier écrit : " + p;
@@ -778,7 +781,9 @@ const TOOLS = {
     desc: "Exécute une commande shell (demande confirmation). Args: {cmd}",
     run: (args, ui) => new Promise(async (resolve) => {
       ui.sys("$ " + args.cmd);
-      if (!(await ui.confirm("Exécuter ?"))) return resolve("Annulé par l'utilisateur.");
+      let okE = ui.permitted && ui.permitted("exec") ? true : await ui.confirm("Exécuter ?", !!(ui && ui.permit));
+      if (okE === "always" && ui.permit) { ui.permit("exec"); okE = true; }
+      if (!okE) return resolve("Annulé par l'utilisateur.");
       exec(args.cmd, { cwd: process.cwd(), timeout: 60000, maxBuffer: 1024 * 500 }, (err, stdout, stderr) => {
         let out = (stdout || "") + (stderr ? "\n[stderr]\n" + stderr : "");
         if (err && !out) out = "Erreur: " + err.message;
@@ -815,7 +820,9 @@ const TOOLS = {
       const abs = inside(p);
       const plat = process.platform;
       const cmd = plat === "win32" ? `start "" "${abs}"` : plat === "darwin" ? `open "${abs}"` : `xdg-open "${abs}"`;
-      if (!(await ui.confirm(`Ouvrir ${p} ?`))) return "Annulé par l'utilisateur.";
+      let okO = ui.permitted && ui.permitted("open_file") ? true : await ui.confirm(`Ouvrir ${p} ?`, !!(ui && ui.permit));
+      if (okO === "always" && ui.permit) { ui.permit("open_file"); okO = true; }
+      if (!okO) return "Annulé par l'utilisateur.";
       await new Promise((resolve, reject) =>
         exec(cmd, { timeout: 15000 }, (e) => (e ? reject(e) : resolve(null))));
       return "Ouvert : " + p;
@@ -1317,7 +1324,7 @@ const COMMANDS = [
   { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
-  { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono"] },
+  { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono", "opencode"] },
   { name: "/sessions", desc: "Panneau des conversations (F2)" },
   { name: "/account", desc: "Panneau du compte (F3)" },
   { name: "/retry", desc: "Relancer la dernière réponse" },
@@ -1459,6 +1466,7 @@ class Screen {
     this.abort = null;
     this.typingMsg = null;
     this.undoStack = [];
+    this.permits = {};
     this.done = null;
     this.onLine = null;
     this.typeTimer = null;
@@ -1535,10 +1543,17 @@ class Screen {
     this.render();
   }
 
-  openModal(title, items, onPick) {
-    this.modal = { title, items: items || [], sel: 0, onPick };
+  openModal(title, items, onPick, filterable = false) {
+    this.modal = { title, items: items || [], sel: 0, onPick, filter: "", filterable: !!filterable };
     this.completion = null;
     this.render();
+  }
+
+  modalItems() {
+    const m = this.modal;
+    if (!m || !m.filterable || !m.filter) return (m && m.items) || [];
+    const f = m.filter.toLowerCase();
+    return m.items.filter((it) => String(it.label || "").toLowerCase().includes(f));
   }
 
   openPalette() {
@@ -1672,9 +1687,9 @@ class Screen {
     this.render();
   }
 
-  confirm(q) {
+  confirm(q, allowAlways = false) {
     return new Promise((resolve) => {
-      this.confirmState = { q: String(q), resolve };
+      this.confirmState = { q: String(q), resolve, always: !!allowAlways };
       this.render();
     });
   }
@@ -1724,32 +1739,73 @@ class Screen {
         const icol = m.ok ? P.mint : P.pink;
         const icon = m.ok ? "✓" : "✗";
         const nOut = String(m.output || "").split("\n").length;
-        push("", ` ${icol}⚙ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""} ${P.dim}· ${nOut}l${P.reset}`);
+        push("", ` ${icol}⏺ ${P.reset + P.bold + P.aqua}${m.name}${P.reset + icol} ${icon}${m.ms != null ? ` ${m.ms.toFixed(1)}s` : ""} ${P.dim}· ${nOut}l${P.reset}`);
         const outs = String(m.output || "").split("\n").slice(0, 12);
         for (const ol of outs) {
-          const t = ol.slice(0, Math.max(20, W - 10));
-          push("  " + t, P.dim + "  " + t + P.reset);
+          const t = ol.slice(0, Math.max(20, W - 12));
+          push("  " + t, P.dim + "  ⎿ " + P.reset + P.dim + t + P.reset);
         }
         const rest = String(m.output || "").split("\n").length - outs.length;
-        if (rest > 0) push("", P.dim + `  … +${rest} lignes` + P.reset);
+        if (rest > 0) push("", P.dim + `  ⎿ … +${rest} lignes` + P.reset);
         push("", "");
         continue;
       }
       const mine = m.role === "user";
       const nameColor = mine ? P.sky : P.mint;
       const border = mine ? P.pink : P.mint;
+      const segParts = [];
+      if (!mine) {
+        const re = /```(\w*)\n([\s\S]*?)```/g;
+        let last = 0, mm;
+        let hasCode = false;
+        while ((mm = re.exec(m.text || ""))) {
+          hasCode = true;
+          if (mm.index > last) segParts.push({ t: "text", s: m.text.slice(last, mm.index) });
+          segParts.push({ t: "code", lang: (mm[1] || "").toLowerCase(), s: mm[2].replace(/\n$/, "") });
+          last = mm.index + mm[0].length;
+        }
+        if (hasCode && last < (m.text || "").length) segParts.push({ t: "text", s: m.text.slice(last) });
+      }
+      if (!segParts.length) segParts.push({ t: "text", s: m.text });
       const wrapped = [];
-      for (const wl of wrapText(m.text, innerW)) wrapped.push(wl);
-      if (!wrapped.length) wrapped.push("");
-      const bw = Math.min(innerW, Math.max(...wrapped.map((l) => l.length)));
+      for (const sg of segParts) {
+        if (sg.t === "code") {
+          wrapped.push({ fence: true, lang: sg.lang, line: "" });
+          for (const wl of wrapText(sg.s, innerW)) wrapped.push({ fence: true, lang: sg.lang, line: wl });
+          wrapped.push({ fence: true, lang: sg.lang, line: null });
+        } else {
+          for (const wl of wrapText(sg.s, innerW)) wrapped.push({ fence: false, line: wl });
+        }
+      }
+      if (!wrapped.length) wrapped.push({ fence: false, line: "" });
+      const bw = Math.min(innerW, Math.max(...wrapped.map((l) => (l.line || "").length)));
       const padEnd = (s) => s + " ".repeat(Math.max(0, bw - s.length));
       const top = "╭" + "─".repeat(bw + 2) + "╮";
       const bot = "╰" + "─".repeat(bw + 2) + "╯";
       const headPlain = `${mine ? "Toi" : "Aura"} • ${m.time || ""}`;
       const headOut = nameColor + P.bold + (mine ? "Toi" : "Aura") + P.reset + P.dim + ` • ${m.time || ""}` + P.reset;
-      const rowsV = [headPlain, top, ...wrapped.map((wl) => `│ ${padEnd(wl)} │`), bot];
+      const rowsV = [headPlain, top];
       const fmt = (wl) => (m.role === "assistant" ? mdInline(wl) : wl);
-      const rowsO = [headOut, border + top + P.reset, ...wrapped.map((wl) => border + "│ " + P.reset + fmt(padEnd(wl)) + border + " │" + P.reset), border + bot + P.reset];
+      const rowsO = [headOut, border + top + P.reset];
+      for (const w of wrapped) {
+        if (w.fence && w.line === "") {
+          const lbl = "◈ " + (w.lang || "code");
+          rowsV.push(`│ ${padEnd(lbl)} │`);
+          rowsO.push(border + "│ " + P.reset + P.bold + P.lavender + padEnd(lbl) + P.reset + border + " │" + P.reset);
+        } else if (w.fence && w.line === null) {
+          rowsV.push(bot);
+          rowsO.push(border + bot + P.reset);
+        } else if (w.fence) {
+          rowsV.push(`│ ${padEnd(w.line)} │`);
+          rowsO.push(border + "│ " + P.reset + P.lemon + padEnd(w.line) + P.reset + border + " │" + P.reset);
+        } else {
+          const wl = w.line;
+          rowsV.push(`│ ${padEnd(wl)} │`);
+          rowsO.push(border + "│ " + P.reset + fmt(padEnd(wl)) + border + " │" + P.reset);
+        }
+      }
+      rowsV.push(bot, "");
+      rowsO.push(border + bot + P.reset, "");
       if (m.meta && !mine) {
         const meta = `${m.time || ""} · ${(m.meta.ms || 0).toFixed(1)}s · ~${m.meta.tok || 0} tok`;
         rowsV.push("  " + meta, "");
@@ -1798,7 +1854,8 @@ class Screen {
       mRows.push(P.dim + "╭" + "─".repeat(mw - 2) + "╮" + P.reset);
       mRows.push(P.dim + "│ " + P.reset + P.bold + P.pink + fit("◆ " + this.modal.title) + P.reset + P.dim + " │" + P.reset);
       mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
-      const mItems = this.modal.items.slice(0, Math.max(1, viewH - 6));
+      const list = this.modalItems();
+      const mItems = list.slice(0, Math.max(1, viewH - 6));
       mItems.forEach((it, i) => {
         const txt = ((i === this.modal.sel ? "❯ " : "  ") + (it.label || "")).slice(0, iw);
         const colored = i === this.modal.sel
@@ -1806,7 +1863,9 @@ class Screen {
           : P.dim + txt + P.reset;
         mRows.push(P.dim + "│ " + P.reset + colored + " ".repeat(Math.max(0, iw - Math.min(txt.length, iw))) + P.dim + " │" + P.reset);
       });
-      const foot = `${kbd("↑↓")} choisir   ${kbd("Entrée")} valider   ${kbd("Échap")} fermer`;
+      const fpieces = [`${kbd("↑↓")} choisir`, `${kbd("Entrée")} valider`, `${kbd("Échap")} fermer`];
+      if (this.modal.filterable) fpieces.push(this.modal.filter ? `filtre : ${this.modal.filter}` : "taper pour filtrer");
+      const foot = fpieces.join("   ");
       const footPlain = stripAnsi(foot);
       const footPad = Math.max(0, Math.floor((iw - footPlain.length) / 2));
       mRows.push(P.dim + "├" + "─".repeat(mw - 2) + "┤" + P.reset);
@@ -1858,7 +1917,9 @@ class Screen {
     let cursorCol = -1, cursorRowOff = 0;
     if (this.confirmState) {
       const q = (`? ${this.confirmState.q}`).slice(0, W - 12);
-      out += "│ " + P.lemon + q + P.reset + " " + kbd("o") + " " + kbd("N") + " ".repeat(Math.max(0, W - 4 - q.length - 8)) + " │" + "\x1b[K\n";
+      const chips = this.confirmState.always ? " " + kbd("o") + " " + kbd("t") + " " + kbd("N") : " " + kbd("o") + " " + kbd("N");
+      const chipLen = this.confirmState.always ? 12 : 8;
+      out += "│ " + P.lemon + q + P.reset + chips + " ".repeat(Math.max(0, W - 4 - q.length - chipLen)) + " │" + "\x1b[K\n";
     } else {
       const inLen = this.input.length;
       let boxTitle = `─ Écris ton message… (${inLen}) ── Ctrl+J ligne, @fichier `;
@@ -1899,6 +1960,12 @@ class Screen {
       rParts.push(`⏱ ${mm}:${ss} ${this.timer.label}`);
     }
     if (this.serve) rParts.push(`srv:${this.servePort}`);
+    let tokSum = 0;
+    for (const m of this.messages) {
+      if (m.meta && m.meta.tok) tokSum += m.meta.tok;
+      else if (m.role === "user" || m.role === "assistant") tokSum += Math.round(String(m.text || "").length / 4);
+    }
+    if (tokSum > 0) rParts.push(`~${tokSum >= 1000 ? (tokSum / 1000).toFixed(1) + "k" : tokSum} tok`);
     rParts.push(this.quotaText, br ? `⎇ ${br}` : "", cwd);
     sR = rParts.filter(Boolean).join(" • ");
     if (this.scroll > 0) sR += (sR ? " • " : "") + "PgDn : bas";
@@ -2029,11 +2096,12 @@ class Screen {
     if (key.name === "pagedown") { this.stuck = false; this.scroll = Math.max(0, this.scroll - 5); this.render(); return; }
     if (this.celebrating) { this.celebrating = false; return; }
     if (this.modal) {
-      const n = this.modal.items.length || 1;
+      const list = this.modalItems();
+      const n = list.length || 1;
       if (key.name === "up") { this.modal.sel = (this.modal.sel - 1 + n) % n; this.render(); return; }
       if (key.name === "down") { this.modal.sel = (this.modal.sel + 1) % n; this.render(); return; }
       if (key.name === "return" || key.name === "tab") {
-        const it = this.modal.items[this.modal.sel];
+        const it = list[Math.min(this.modal.sel, list.length - 1)];
         const cb = this.modal.onPick;
         this.modal = null;
         if (cb) cb(it ? it.value : null);
@@ -2041,10 +2109,23 @@ class Screen {
         return;
       }
       if (key.name === "escape") {
+        if (this.modal.filter) { this.modal.filter = ""; this.modal.sel = 0; this.render(); return; }
         const cb = this.modal.onPick;
         this.modal = null;
         if (cb) cb(null);
         else this.render();
+        return;
+      }
+      if (this.modal.filterable && str && str.length === 1 && !key.ctrl && !key.meta && str >= " ") {
+        this.modal.filter += str;
+        this.modal.sel = 0;
+        this.render();
+        return;
+      }
+      if (this.modal.filterable && key.name === "backspace" && this.modal.filter) {
+        this.modal.filter = this.modal.filter.slice(0, -1);
+        this.modal.sel = 0;
+        this.render();
         return;
       }
       return;
@@ -2056,6 +2137,7 @@ class Screen {
     if (this.confirmState) {
       const c = (str || "").toLowerCase();
       if (c === "y" || c === "o") this.resolveConfirm(true);
+      else if (c === "t" && this.confirmState.always) this.resolveConfirm("always");
       else if (c === "n" || key.name === "escape" || key.name === "return") this.resolveConfirm(false);
       return;
     }
@@ -2519,7 +2601,9 @@ async function runTUI(state, updateAvailable) {
           if (!arg) { screen.sys("Usage : /open <chemin>"); return; }
           try {
             const res = await TOOLS.open_file.run({ path: arg }, {
-              confirm: (q) => screen.confirm(q),
+              confirm: (q, always) => screen.confirm(q, always),
+      permitted: (n) => !!(screen.permits || {})[n],
+      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; },
               sys: (t) => screen.sys(t),
             });
             screen.sys(res);
@@ -2631,8 +2715,8 @@ async function runTUI(state, updateAvailable) {
         case "notes": {
           const arr = loadList(NOTES_FILE);
           if (!arr.length) { screen.sys("Aucune note. /note <texte> pour ajouter."); return; }
-          screen.sys(`${arr.length} note(s) :`);
-          arr.slice(-15).forEach((n, i) => screen.sys(`  ${i + 1}. ${n.text}`));
+          const rows = [`🗒 Notes (${arr.length})`, ...arr.slice(-10).map((n, i) => `  ${i + 1}. ${String(n.text).slice(0, 60)}`)];
+          screen.tool("notes", true, null, rows.join("\n"));
           return;
         }
         case "unnote": {
@@ -2655,7 +2739,9 @@ async function runTUI(state, updateAvailable) {
         case "todos": {
           const arr = loadList(TODOS_FILE);
           if (!arr.length) { screen.sys("Rien à faire. /todo <texte> pour ajouter."); return; }
-          arr.slice(-15).forEach((x, i) => screen.sys(`  ${i + 1}. [${x.done ? "x" : " "}] ${x.text}`));
+          const rows = [`☑ Todos (${arr.filter((x) => x.done).length}/${arr.length})`];
+          arr.slice(-10).forEach((x, i) => rows.push(`  ${x.done ? "☑" : "☐"} ${i + 1}. ${String(x.text).slice(0, 55)}`));
+          screen.tool("todos", true, null, rows.join("\n"));
           return;
         }
         case "todook": {
@@ -3303,7 +3389,9 @@ async function runTUI(state, updateAvailable) {
       sys: (t, dim) => screen.sys(t),
       assistant: (t) => screen.assistant(t),
       thinking: (s) => screen.thinking(s),
-      confirm: (q) => screen.confirm(q),
+      confirm: (q, always) => screen.confirm(q, always),
+      permitted: (n) => !!(screen.permits || {})[n],
+      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; },
       tool: (name, ok, ms, output) => screen.tool(name, ok, ms, output),
       cancelled: () => screen.cancelled,
       signal: screen.abort.signal,
