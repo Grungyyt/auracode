@@ -214,9 +214,104 @@ async function newSession(key, model) {
 function inside(p) {
   return path.resolve(process.cwd(), p);
 }
+// ---------- Checkpoints : sauvegardes locales avant chaque écriture (/rewind) ----------
+const BACKUP_ROOT = path.join(HOME, "backups");
+const SKILLS_DIR = path.join(HOME, "skills");
+function backupList(root) {
+  // [{n, file, rel, path, time, session, existed, content}] du plus récent au plus ancien.
+  const out = [];
+  try {
+    const base = root || BACKUP_ROOT;
+    if (!fs.existsSync(base)) return out;
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith(".bak.json")) {
+          try {
+            const meta = JSON.parse(fs.readFileSync(full, "utf8"));
+            out.push({ path: full, file: meta.file, rel: meta.rel || meta.file, time: meta.time || 0, session: meta.session || "", existed: !!meta.existed, content: meta.content ?? null });
+          } catch { /* backup corrompu : ignoré */ }
+        }
+      }
+    };
+    walk(base);
+  } catch { /* ignore */ }
+  out.sort((a, b) => b.time - a.time);
+  out.forEach((b, i) => { b.n = i + 1; });
+  return out;
+}
+function snapshotFile(abs, sessionId, root) {
+  // Sauvegarde le contenu actuel avant écriture (ou marque "nouveau"). Retourne le chemin du backup ou null.
+  try {
+    let prev = null, existed = false;
+    try { prev = fs.readFileSync(abs, "utf8"); existed = true; } catch { prev = null; }
+    if (prev && prev.length > 500000) return null; // trop gros : pas de snapshot
+    const rel = path.relative(process.cwd(), abs).replace(/\\/g, "/");
+    const safe = rel.replace(/[^a-zA-Z0-9.\-_]/g, "_").slice(-80) || "fichier";
+    const base = root || BACKUP_ROOT;
+    const dir = path.join(base, String(sessionId || "local").slice(0, 12));
+    fs.mkdirSync(dir, { recursive: true });
+    const fp = path.join(dir, Date.now() + "-" + safe + ".bak.json");
+    fs.writeFileSync(fp, JSON.stringify({ file: abs, rel, time: Date.now(), session: sessionId || "", existed, content: prev }));
+    const all = backupList(root);
+    for (const b of all.slice(50)) { try { fs.unlinkSync(b.path); } catch { /* ignore */ } }
+    return fp;
+  } catch { return null; }
+}
+// ---------- Mémoire projet (AURA.md) + skills + coûts ----------
+function auraFile() {
+  try {
+    const p = path.join(process.cwd(), "AURA.md");
+    if (!fs.existsSync(p)) return "";
+    return fs.readFileSync(p, "utf8").slice(0, 1500);
+  } catch { return ""; }
+}
+function skillParse(text) {
+  const lines = String(text || "").split("\n");
+  let name = "", desc = "";
+  for (const l of lines) {
+    const t = l.trim();
+    if (!name && /^#{1,3}\s+/.test(t)) name = t.replace(/^#{1,3}\s+/, "").trim();
+    else if (!desc && /^>\s?/.test(t)) desc = t.replace(/^>\s?/, "").trim();
+    if (name && desc) break;
+  }
+  if (!name && lines.length) name = lines[0].trim().replace(/^#*\s*/, "").slice(0, 40);
+  return { name: name || "sans-nom", desc: desc || "" };
+}
+function listSkills(dir) {
+  const out = [];
+  try {
+    const base = dir || SKILLS_DIR;
+    if (!fs.existsSync(base)) return out;
+    for (const e of fs.readdirSync(base)) {
+      if (!e.endsWith(".md")) continue;
+      try {
+        const t = fs.readFileSync(path.join(base, e), "utf8");
+        const s = skillParse(t);
+        out.push({ id: e.replace(/\.md$/, ""), name: s.name, desc: s.desc, file: path.join(base, e), text: t });
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
+}
+function sessionSpend(messages) {
+  // Même calcul que la barre de statut (ui.js) : total tokens estimés de la conversation.
+  let t = 0;
+  try {
+    for (const m of messages || []) {
+      if (m && m.meta && m.meta.tok) t += m.meta.tok;
+      else if (m && (m.role === "user" || m.role === "assistant")) t += Math.round(String(m.text || "").length / 4);
+    }
+  } catch { /* ignore */ }
+  return t;
+}
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
 }
+const denyHit = (ui, n) => !!(ui && ui.denied && ui.denied[n]);
+const DENY_MSG = (t) => `Refusé par règle auto (${t}). /permissions pour voir, /auto ${t} ask pour réactiver.`;
 const TOOLS = {
   read_file: {
     desc: "Lit un fichier texte (max 20 Ko). Args: {path}",
@@ -235,9 +330,11 @@ const TOOLS = {
         ui.sys(`--- ${old ? "Diff" : "Nouveau fichier"} ${p} (${(content || "").length} caractères) ---`);
         (old ? diffLines(old, content || "").split("\n").slice(0, 25) : String(content || "").split("\n").slice(0, 25)).forEach((l) => ui.sys(l || " "));
         ui.sys("--- fin aperçu ---");
+      if (denyHit(ui, "write_file")) return DENY_MSG("write_file");
       let okW = ui.permitted && ui.permitted("write_file") ? true : await ui.confirm("Écrire ce fichier ?", !!(ui && ui.permit));
       if (okW === "always" && ui.permit) { ui.permit("write_file"); okW = true; }
       if (!okW) return "Annulé par l'utilisateur.";
+      snapshotFile(abs, getSessionId());
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content || "");
       return "Fichier écrit : " + p;
@@ -247,6 +344,7 @@ const TOOLS = {
     desc: "Exécute une commande shell (demande confirmation). Args: {cmd}",
     run: (args, ui) => new Promise(async (resolve) => {
       ui.sys("$ " + args.cmd);
+      if (denyHit(ui, "exec")) return resolve(DENY_MSG("exec"));
       let okE = ui.permitted && ui.permitted("exec") ? true : await ui.confirm("Exécuter ?", !!(ui && ui.permit));
       if (okE === "always" && ui.permit) { ui.permit("exec"); okE = true; }
       if (!okE) return resolve("Annulé par l'utilisateur.");
@@ -286,6 +384,7 @@ const TOOLS = {
       const abs = inside(p);
       const plat = process.platform;
       const cmd = plat === "win32" ? `start "" "${abs}"` : plat === "darwin" ? `open "${abs}"` : `xdg-open "${abs}"`;
+      if (denyHit(ui, "open_file")) return DENY_MSG("open_file");
       let okO = ui.permitted && ui.permitted("open_file") ? true : await ui.confirm(`Ouvrir ${p} ?`, !!(ui && ui.permit));
       if (okO === "always" && ui.permit) { ui.permit("open_file"); okO = true; }
       if (!okO) return "Annulé par l'utilisateur.";
@@ -352,7 +451,7 @@ async function agentTurn(prompt, key, model, effort, ui, lang = "fr") {
   // le message est stocké tel quel et réaffiché sur le web, sans le protocole).
   const userAsk = prompt;
   const home = os.homedir();
-  const preamble = SYSTEM + (() => { try { const pz = String(loadJson(CONFIG_FILE, {}).persona || "").trim().slice(0, 2000); return pz ? `\n\n[Persona utilisateur : ${pz}]` : ""; } catch { return ""; } })() + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
+  const preamble = SYSTEM + (() => { try { const pz = String(loadJson(CONFIG_FILE, {}).persona || "").trim().slice(0, 2000); return pz ? `\n\n[Persona utilisateur : ${pz}]` : ""; } catch { return ""; } })() + (() => { try { const a = auraFile().trim(); return a ? `\n\n[Mémoire projet (AURA.md) :\n${a}]` : ""; } catch { return ""; } })() + (() => { try { const sk = loadJson(CONFIG_FILE, {}).skill; if (!sk) return ""; const hit = listSkills().find((s) => s.id === sk); return hit ? `\n\n[Compétence active (${hit.id}) :\n${String(hit.text).slice(0, 2000)}]` : ""; } catch { return ""; } })() + `\n\n[Contexte PC : OS ${process.platform}, dossier actuel ${process.cwd()}, dossier perso ${home}, Bureau ${path.join(home, "Desktop")}. Accès COMPLET aux fichiers, chemins relatifs et absolus.]`;
   const callChat = async (sid, hist) =>
     api("/api/chat", { message: prompt, session_id: sid, model, effort, lang, history: [{ role: "user", content: preamble }, ...hist] }, key, "POST", ui.signal);
 

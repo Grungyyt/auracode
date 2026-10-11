@@ -7,6 +7,28 @@ async function runTUI(state, updateAvailable) {
     process.exit(1);
   }
   const screen = new Screen(state, updateAvailable);
+  const saveRules = () => {
+    try {
+      const cfg = loadJson(CONFIG_FILE, {});
+      const r = {};
+      for (const t of Object.keys(screen.permits || {})) if (screen.permits[t]) r[t] = "allow";
+      for (const t of Object.keys(screen.denied || {})) if (screen.denied[t]) r[t] = "deny";
+      cfg.permits = r;
+      saveJson(CONFIG_FILE, cfg);
+    } catch { /* ignore */ }
+  };
+  try {
+    const sv = loadJson(CONFIG_FILE, {});
+    const r = (sv && typeof sv.permits === "object" && sv.permits) || {};
+    screen.permits = screen.permits || {};
+    screen.denied = screen.denied || {};
+    for (const t of Object.keys(r)) {
+      if (r[t] === "deny") screen.denied[t] = true;
+      else if (r[t] === "allow") screen.permits[t] = true;
+    }
+  } catch { /* ignore */ }
+  screen.onQuickSwitch = () => screen.onLine("/conv");
+  screen.saveRules = saveRules;
 
   screen.onLine = async (line) => {
     if (screen.pendingWrite && line !== "/end") {
@@ -21,10 +43,14 @@ async function runTUI(state, updateAvailable) {
       const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"];
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
-      const saveCfg = () => saveJson(CONFIG_FILE, {
-        model: state.model, effort: state.effort,
-        lang: state.lang, theme: state.theme,
-      });
+      const saveCfg = () => {
+        try {
+          const c = loadJson(CONFIG_FILE, {});
+          c.model = state.model; c.effort = state.effort;
+          c.lang = state.lang; c.theme = state.theme;
+          saveJson(CONFIG_FILE, c);
+        } catch { /* ignore */ }
+      };
       const pickModal = (title, options, current, apply) => {
         screen.openModal(title, options.map((o) => ({ label: o + (o === current ? "  ● actuel" : ""), value: o })), (v) => {
           if (!v) { screen.render(); return; }
@@ -287,6 +313,7 @@ async function runTUI(state, updateAvailable) {
         }
         case "bash": {
           if (!arg) { screen.sys("Usage : /bash <commande>"); return; }
+          if ((screen.denied || {}).exec) { screen.sys("Refusé par règle auto (exec). /auto exec ask pour réactiver."); return; }
           screen.sys("$ " + arg);
           if (!(await screen.confirm("Exécuter ?"))) { screen.sys("Annulé."); return; }
           const t0 = Date.now();
@@ -329,6 +356,7 @@ async function runTUI(state, updateAvailable) {
             inside(pw.path);
             let existed = false, prev = "";
             try { prev = fs.readFileSync(abs, "utf8"); existed = true; } catch { /* nouveau */ }
+            snapshotFile(abs, getSessionId());
             fs.mkdirSync(path.dirname(abs), { recursive: true });
             fs.writeFileSync(abs, content);
             screen.undoStack.push({ path: pw.path, existed, content: prev });
@@ -341,6 +369,7 @@ async function runTUI(state, updateAvailable) {
           const blk = findCodeBlock(screen);
           if (!blk) { screen.sys("Aucun bloc de code à exécuter."); return; }
           screen.sys(`Bloc ${blk.lang || "?"} détecté (${blk.code.length} caractères).`);
+          if ((screen.denied || {}).exec) { screen.sys("Refusé par règle auto (exec). /auto exec ask pour réactiver."); return; }
           if (!(await screen.confirm("Exécuter ?"))) { screen.sys("Annulé."); return; }
           const runners = {
             js: ["node", ".js"], javascript: ["node", ".js"],
@@ -387,7 +416,8 @@ async function runTUI(state, updateAvailable) {
             const res = await TOOLS.open_file.run({ path: arg }, {
               confirm: (q, always) => screen.confirm(q, always),
       permitted: (n) => !!(screen.permits || {})[n],
-      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; },
+      denied: screen.denied || {},
+      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; try { screen.saveRules && screen.saveRules(); } catch { /* ignore */ } },
               sys: (t) => screen.sys(t),
             });
             screen.sys(res);
@@ -1090,6 +1120,129 @@ async function runTUI(state, updateAvailable) {
           arr.forEach((x) => screen.sys(`  !${x.name} → ${String(x.text).slice(0, 60)}`));
           return;
         }
+        case "mkdir": {
+          if (!arg) { screen.sys("Usage : /mkdir <chemin>"); return; }
+          try {
+            const abs = inside(arg);
+            fs.mkdirSync(abs, { recursive: true });
+            screen.tool("mkdir " + arg, true, null, "Dossier OK : " + abs);
+          } catch (e) { screen.tool("mkdir", false, null, e.message); }
+          return;
+        }
+        case "touch": {
+          if (!arg) { screen.sys("Usage : /touch <chemin>"); return; }
+          try {
+            const abs = inside(arg);
+            if (fs.existsSync(abs)) {
+              const now = new Date();
+              fs.utimesSync(abs, now, now);
+              screen.tool("touch " + arg, true, null, "Existe déjà (dates mises à jour).");
+            } else {
+              snapshotFile(abs, getSessionId());
+              fs.mkdirSync(path.dirname(abs), { recursive: true });
+              fs.writeFileSync(abs, "");
+              screen.tool("touch " + arg, true, null, "Fichier créé (vide).");
+            }
+          } catch (e) { screen.tool("touch", false, null, e.message); }
+          return;
+        }
+        case "resume": {
+          let list = [];
+          try {
+            const d = await api("/api/sessions", null, state.key, "GET");
+            list = d.sessions || [];
+          } catch (e) { screen.sys("Erreur : " + e.message); return; }
+          if (!list.length) { screen.sys("Aucune conversation. /new pour commencer."); return; }
+          const n = parseInt(arg, 10);
+          const pick = Number.isFinite(n) && n >= 1 ? n : 1;
+          const s = list[list.length - pick];
+          if (!s) { screen.sys(`Numéro hors plage (1 = dernière, max ${list.length}).`); return; }
+          try {
+            setSessionId(s.session_id);
+            if (s.model) { state.model = s.model; saveCfg(); }
+            await screen.refreshQuota();
+            screen.sys(`Reprise : ${String(s.session_id).slice(0, 8)} • ${s.model || "?"} • ${(s.title || "").slice(0, 40)}`);
+            screen.render();
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "rewind": {
+          const all = backupList();
+          if (!all.length) { screen.sys("Aucun checkpoint. Les écritures futures seront sauvegardées avant modification."); return; }
+          if (!arg || arg === "liste" || arg === "list") {
+            screen.sys("Checkpoints (plus récent d'abord) : /rewind <n>");
+            all.slice(0, 10).forEach((b) => screen.sys(`  ${b.n}. ${b.rel} — ${new Date(b.time).toLocaleString()}${b.existed ? "" : " (nouveau)"}`));
+            return;
+          }
+          const n = parseInt(arg, 10);
+          const b = all.find((x) => x.n === n);
+          if (!b) { screen.sys("Numéro invalide. /rewind liste"); return; }
+          try {
+            if (b.existed) fs.writeFileSync(b.file, b.content ?? "");
+            else { try { fs.unlinkSync(b.file); } catch { /* déjà absent */ } }
+            screen.tool("rewind", true, null, `${b.rel} restauré (${b.existed ? "contenu précédent" : "fichier supprimé, il était nouveau"}).`);
+          } catch (e) { screen.tool("rewind", false, null, e.message); }
+          return;
+        }
+        case "init": {
+          const fp = path.join(process.cwd(), "AURA.md");
+          if (fs.existsSync(fp)) { screen.sys("AURA.md existe déjà — édite-le directement."); return; }
+          const tpl = `# ${path.basename(process.cwd())}\n\n> Mémoire projet lue à chaque réponse. Décris ici : but du projet, commandes utiles, conventions.\n\n## Contexte\n- ...\n\n## Commandes\n- ...\n\n## Conventions\n- ...\n`;
+          try {
+            snapshotFile(fp, getSessionId());
+            fs.writeFileSync(fp, tpl);
+            screen.tool("init", true, null, "AURA.md créé — complète-le, il sera relu à chaque réponse.");
+          } catch (e) { screen.tool("init", false, null, e.message); }
+          return;
+        }
+        case "cost": {
+          const tok = sessionSpend(screen.messages || []);
+          const q = screen.quotaText ? ` · ${screen.quotaText}` : "";
+          screen.sys(`Coût session : ~${tok} tok estimés (${state.model}, effort ${state.effort})${q}`);
+          return;
+        }
+        case "skill": {
+          const all = listSkills();
+          if (!arg) {
+            if (!all.length) { screen.sys(`Aucune compétence. Crée des fichiers .md dans ${SKILLS_DIR} puis /skill <nom>.`); return; }
+            screen.sys("Compétences :");
+            all.forEach((s) => screen.sys(`  ${s.id} — ${s.name}${s.desc ? " : " + s.desc.slice(0, 60) : ""}`));
+            return;
+          }
+          if (arg === "off") {
+            try { const c = loadJson(CONFIG_FILE, {}); delete c.skill; saveJson(CONFIG_FILE, c); } catch { /* ignore */ }
+            screen.sys("Compétence désactivée.");
+            return;
+          }
+          const hit = all.find((s) => s.id === arg) || all.find((s) => s.name.toLowerCase() === String(arg).toLowerCase());
+          if (!hit) { screen.sys(`Introuvable : ${arg} (/skill pour la liste)`); return; }
+          try { const c = loadJson(CONFIG_FILE, {}); c.skill = hit.id; saveJson(CONFIG_FILE, c); } catch { /* ignore */ }
+          screen.sys(`Compétence active : ${hit.id} — ${hit.name} (injectée à chaque réponse, /skill off pour couper)`);
+          return;
+        }
+        case "auto": case "allow": case "deny": {
+          const VALID = ["write_file", "exec", "open_file"];
+          let tool = arg, mode = cmd === "allow" ? "allow" : cmd === "deny" ? "deny" : "";
+          if (cmd === "auto") {
+            const parts = String(arg).split(/\s+/).filter(Boolean);
+            tool = parts[0] || ""; mode = (parts[1] || "").toLowerCase();
+            if (!tool || !["allow", "deny", "ask"].includes(mode)) { screen.sys("Usage : /auto <outil> <allow|deny|ask>  (outils : write_file, exec, open_file)"); return; }
+          }
+          if (!VALID.includes(tool)) { screen.sys("Outil inconnu. Valides : " + VALID.join(", ") + " (/bash et /run suivent exec)"); return; }
+          screen.permits = screen.permits || {}; screen.denied = screen.denied || {};
+          if (mode === "allow") { screen.permits[tool] = true; delete screen.denied[tool]; }
+          else if (mode === "deny") { screen.denied[tool] = true; delete screen.permits[tool]; }
+          else { delete screen.permits[tool]; delete screen.denied[tool]; }
+          try { screen.saveRules && screen.saveRules(); } catch { /* ignore */ }
+          screen.sys(`${tool} → ${mode === "allow" ? "toujours autorisé" : mode === "deny" ? "toujours refusé" : "demande à chaque fois"} (persisté).`);
+          return;
+        }
+        case "permissions": {
+          const rows = ["write_file", "exec", "open_file"].map((t) =>
+            `  ${t} : ${(screen.denied || {})[t] ? "toujours refusé" : (screen.permits || {})[t] ? "toujours autorisé" : "demande à chaque fois"}`);
+          screen.sys("Règles auto (persistées) :\n" + rows.join("\n") + "\n(/bash et /run suivent exec)");
+          return;
+        }
         case "conv": {
           let list = [];
           try {
@@ -1198,7 +1351,8 @@ async function runTUI(state, updateAvailable) {
       thinking: (s) => screen.thinking(s),
       confirm: (q, always) => screen.confirm(q, always),
       permitted: (n) => !!(screen.permits || {})[n],
-      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; },
+      denied: screen.denied || {},
+      permit: (n) => { screen.permits = screen.permits || {}; screen.permits[n] = true; try { screen.saveRules && screen.saveRules(); } catch { /* ignore */ } },
       tool: (name, ok, ms, output) => screen.tool(name, ok, ms, output),
       cancelled: () => screen.cancelled,
       signal: screen.abort.signal,
@@ -1251,12 +1405,13 @@ async function runTUI(state, updateAvailable) {
 // Login OAuth : serveur local http://127.0.0.1:3000/login -> VTH authorize
 // -> callback locale -> échange via le VPS (la clé privée ne quitte jamais le serveur).
 async function main() {
-  const args = process.argv.slice(2);
+  let args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(`${PKG.version} (build ${buildId()})`); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
-  Plein écran : /new /model /effort /lang /sessions /retry /bash /read /run /write /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir)\n`);
+  auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
+  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
     return;
   }
   purgeStoredSecrets();
@@ -1271,6 +1426,13 @@ async function main() {
   if (mi >= 0 && args[mi + 1]) model = args[mi + 1];
   const ei = args.indexOf("--effort");
   if (ei >= 0 && args[ei + 1]) effort = args[ei + 1];
+  let printMode = false, outFormat = "text";
+  args = args.filter((a) => {
+    if (a === "-p" || a === "--print") { printMode = true; return false; }
+    const m = /^--output-format=(.+)$/.exec(a);
+    if (m) { outFormat = m[1] === "json" ? "json" : "text"; return false; }
+    return true;
+  });
 
   if (args[0] === "login") {
     console.log("Connexion via VTH Auth (navigateur)...\n");
@@ -1324,7 +1486,8 @@ async function main() {
     try {
       if (!sid) sid = await newSession(key, model);
       const d = await api("/api/chat", { message: q, session_id: sid, model, effort }, key);
-      console.log("\n" + (d.reply || "").trim() + "\n");
+      if (printMode && outFormat === "json") console.log(JSON.stringify({ model, effort, session_id: sid, answer: (d.reply || "").trim() }));
+      else console.log("\n" + (d.reply || "").trim() + "\n");
     } catch (e) {
       const er = e.data || {};
       const lockHit = /aura 1\.3/i.test(String(er.hint || "") + " " + String(er.error || ""));

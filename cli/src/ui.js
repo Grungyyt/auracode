@@ -368,6 +368,17 @@ const COMMANDS = [
   { name: "/rainbow", desc: "Texte arc-en-ciel" },
   { name: "/cowsay", desc: "Vache qui parle" },
   { name: "/feux-artifice-test", desc: "Feux d'artifice (admin)" },
+  { name: "/mkdir", desc: "Crée un dossier : /mkdir <chemin>", files: true },
+  { name: "/touch", desc: "Crée un fichier vide : /touch <chemin>", files: true },
+  { name: "/resume", desc: "Reprend : /resume [n] (défaut dernière)" },
+  { name: "/rewind", desc: "Annule une écriture : /rewind [n|liste]" },
+  { name: "/init", desc: "Crée AURA.md (mémoire projet)" },
+  { name: "/cost", desc: "Coût estimé de la session" },
+  { name: "/skill", desc: "Compétence perso : /skill <nom>", skills: true },
+  { name: "/auto", desc: "Règle auto : /auto <outil> <allow|deny|ask>" },
+  { name: "/permissions", desc: "Voir les règles auto" },
+  { name: "/allow", desc: "Toujours autoriser : /allow <outil>" },
+  { name: "/deny", desc: "Toujours refuser : /deny <outil>" },
   { name: "/clear", desc: "Effacer l'écran" },
   { name: "/help", desc: "Aide" },
   { name: "/exit", desc: "Quitter" },
@@ -414,6 +425,7 @@ class Screen {
     this.typingMsg = null;
     this.undoStack = [];
     this.permits = {};
+    this.denied = {};
     this.done = null;
     this.onLine = null;
     this.typeTimer = null;
@@ -709,7 +721,8 @@ class Screen {
         continue;
       }
       const mine = m.role === "user";
-      const nameColor = mine ? P.sky : P.mint;
+      const mm = String((this.state && this.state.model) || "");
+      const nameColor = mine ? P.sky : mm.includes("1.3") ? P.butter : /code/i.test(mm) ? P.aqua : P.mint;
       const border = mine ? P.pink : P.mint;
       const segParts = [];
       if (!mine) {
@@ -980,6 +993,15 @@ class Screen {
         this.completion = items.length ? { items, sel: 0 } : null;
         return;
       }
+      if (cmd && cmd.skills) {
+        const frag = m2[2].toLowerCase();
+        const items = listSkills()
+          .filter((s) => (s.id + " " + s.name).toLowerCase().includes(frag))
+          .slice(0, 8)
+          .map((s) => ({ insert: `/${m2[1]} ${s.id}`, display: `${s.id}  —  ${s.name}` }));
+        this.completion = items.length ? { items, sel: 0 } : null;
+        return;
+      }
     }
     const before = this.input.slice(0, this.cursor);
     const ma = /(^|[\s(])@([\w.\-/:\\]*)$/.exec(before);
@@ -1037,12 +1059,11 @@ class Screen {
       const rest = sp < 0 ? "" : line.slice(sp + 1);
       const hit = loadList(MACROS_FILE).find((x) => x.name === name);
       if (!hit) {
-        this.sys(`Macro inconnue : ${name} (/macro pour la liste)`);
-        this.completion = null; this.input = ""; this.cursor = 0; this.histIdx = -1;
-        this.render();
-        return;
+        // Pas de macro : !cmd devient une commande shell directe (style Claude Code).
+        line = ("/bash " + line.slice(1)).trim();
+      } else {
+        line = (hit.text + " " + rest).trim();
       }
-      line = (hit.text + " " + rest).trim();
     }
     this.completion = null;
     if (!line) { this.render(); return; }
@@ -1126,6 +1147,7 @@ class Screen {
       return;
     }
     if (key.ctrl && key.name === "p") { this.openPalette(); return; }
+    if (key.ctrl && key.name === "o") { if (typeof this.onQuickSwitch === "function") this.onQuickSwitch(); else { this.input = "/conv "; this.cursor = this.input.length; this.onEdit(); } return; }
     if (key.name === "f1") { this.openHelp(); return; }
     if (key.name === "f2") { this.toggleSidebar(); return; }
     if (key.name === "f3") { this.toggleAccount(); return; }
