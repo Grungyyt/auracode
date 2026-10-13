@@ -5,14 +5,14 @@ const os = require("os");
 const path = require("path");
 const readline = require("readline");
 const crypto = require("crypto");
-const { exec, execSync } = require("child_process");
+const { exec, execSync, spawn } = require("child_process");
 
 const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.1" };
+const PKG = { version: "1.4.0.0.2" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",

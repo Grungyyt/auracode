@@ -334,6 +334,20 @@ function formatAdminStats(g) {
     return L.join("\n");
   } catch { return "Stats illisibles."; }
 }
+function sandboxSpawnArgs() {
+  // Commande "nouveau terminal Windows" pour la sandbox admin (pur, testé).
+  // Titre ASCII (cmd.exe) + /k (fenêtre conservée pour voir les erreurs).
+  const exe = process.execPath || "";
+  const isExe = /auracode(\.exe)?$/i.test(exe);
+  const script = (!isExe && process.argv[1]) || "";
+  const inner = (isExe || !script) ? [(isExe ? exe : "auracode"), "--sandbox"]
+    : [exe, script, "--sandbox"];
+  return {
+    launcher: "cmd.exe",
+    args: ["/c", "start", "AuraCode Sandbox BETA - Aura 1.3", "/d",
+      process.cwd(), "cmd", "/k", ...inner],
+  };
+}
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
 }

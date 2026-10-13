@@ -29,6 +29,7 @@ async function runTUI(state, updateAvailable) {
   } catch { /* ignore */ }
   screen.onQuickSwitch = () => screen.onLine("/conv");
   screen.saveRules = saveRules;
+  if (state.sandbox) screen.sys("🧪 SANDBOX ADMIN — Aura 1.3 déverrouillé (bêta, ne pas diffuser).");
 
   screen.onLine = async (line) => {
     if (screen.pendingWrite && line !== "/end") {
@@ -82,7 +83,7 @@ async function runTUI(state, updateAvailable) {
             return;
           }
           if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
-          if (arg === "aura-1.3" && aura13Locked()) {
+          if (arg === "aura-1.3" && aura13Locked() && !state.sandbox) {
             screen.sys(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
             screen.sys("Ouverture de la page d'attente...");
             openBrowser(AURA13_WAIT_URL);
@@ -133,7 +134,7 @@ async function runTUI(state, updateAvailable) {
         }
         case "image13": {
           if (!arg) { screen.sys("Usage : /image13 <description>  (Aura 1.3 Image, grand format)"); return; }
-          if (aura13Locked()) {
+          if (aura13Locked() && !state.sandbox) {
             screen.sys(`🔒 Aura 1.3 Image dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
             openBrowser(AURA13_WAIT_URL);
             screen.render();
@@ -1255,6 +1256,25 @@ async function runTUI(state, updateAvailable) {
           screen.busy = false; screen.render();
           return;
         }
+        case "admin-sandbox": {
+          screen.busy = true; screen.render();
+          try {
+            const me = await api("/api/me", null, state.key, "GET");
+            if (!me.is_admin) {
+              screen.sys("⛔ Sandbox 1.3 réservée aux comptes avec la permission admin.");
+            } else if (process.platform !== "win32") {
+              screen.sys("⛔ Sandbox : nouveau terminal supporté uniquement sous Windows pour l'instant.");
+            } else {
+              const s = sandboxSpawnArgs();
+              const child = spawn(s.launcher, s.args, { detached: true, stdio: "ignore", cwd: process.cwd() });
+              child.unref();
+              screen.sys("🧪 Sandbox admin ouverte dans un nouveau terminal (Aura 1.3 bêta, verrou levé).");
+              screen.sys("Reconnecte-toi via le navigateur dans la nouvelle fenêtre, puis teste en bêta (ne pas diffuser).");
+            }
+          } catch (e) { screen.sys("Erreur : " + ((e && e.message) || e)); }
+          screen.busy = false; screen.render();
+          return;
+        }
         case "conv": {
           let list = [];
           try {
@@ -1377,7 +1397,7 @@ async function runTUI(state, updateAvailable) {
       else {
         const d = e.data || {};
         const lockHit = state.model === "aura-1.3" || /aura 1\.3/i.test(String(d.hint || "") + " " + String(d.error || ""));
-        if (lockHit && aura13Locked()) {
+        if (lockHit && aura13Locked() && !state.sandbox) {
           screen.sys(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
           openBrowser(AURA13_WAIT_URL);
         } else screen.sys(d.quota_exceeded ? (d.error || "Quota épuisé.") : `Erreur (${e.status || "?"}) : ${e.message}`);
@@ -1423,7 +1443,8 @@ async function main() {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
-  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
+  auracode --sandbox       Sandbox admin Aura 1.3 (nouveau terminal via /admin-sandbox)
+  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /admin-sandbox /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
     return;
   }
   purgeStoredSecrets();
@@ -1438,13 +1459,15 @@ async function main() {
   if (mi >= 0 && args[mi + 1]) model = args[mi + 1];
   const ei = args.indexOf("--effort");
   if (ei >= 0 && args[ei + 1]) effort = args[ei + 1];
-  let printMode = false, outFormat = "text";
+  let printMode = false, outFormat = "text", sandboxMode = false;
   args = args.filter((a) => {
     if (a === "-p" || a === "--print") { printMode = true; return false; }
+    if (a === "--sandbox") { sandboxMode = true; return false; }
     const m = /^--output-format=(.+)$/.exec(a);
     if (m) { outFormat = m[1] === "json" ? "json" : "text"; return false; }
     return true;
   });
+  if (sandboxMode) model = "aura-1.3";
 
   if (args[0] === "login") {
     console.log("Connexion via VTH Auth (navigateur)...\n");
@@ -1503,7 +1526,7 @@ async function main() {
     } catch (e) {
       const er = e.data || {};
       const lockHit = /aura 1\.3/i.test(String(er.hint || "") + " " + String(er.error || ""));
-      if (lockHit && aura13Locked()) {
+      if (lockHit && aura13Locked() && !sandboxMode) {
         console.log(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
         openBrowser(AURA13_WAIT_URL);
       } else console.log(er.quota_exceeded ? (er.error || "Quota épuisé.") : "Erreur (" + (e.status || "?") + ") : " + e.message);
@@ -1551,7 +1574,7 @@ async function main() {
     return;
   }
   // ---------- Mode plein écran ----------
-  const state = { key, model, effort, lang, theme: "pastel" };
+  const state = { key, model, effort, lang, theme: "pastel", sandbox: sandboxMode };
   try {
     const savedTheme = loadJson(CONFIG_FILE, {}).theme;
     if (savedTheme && THEMES[savedTheme]) {

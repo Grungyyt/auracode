@@ -378,6 +378,7 @@ const COMMANDS = [
   { name: "/auto", desc: "Règle auto : /auto <outil> <allow|deny|ask>" },
   { name: "/permissions", desc: "Voir les règles auto" },
   { name: "/admin-stats", desc: "Stats globales (admin)" },
+  { name: "/admin-sandbox", desc: "Sandbox 1.3 bêta (admin, nouveau terminal)" },
   { name: "/allow", desc: "Toujours autoriser : /allow <outil>" },
   { name: "/deny", desc: "Toujours refuser : /deny <outil>" },
   { name: "/clear", desc: "Effacer l'écran" },

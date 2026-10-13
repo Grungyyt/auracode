@@ -80,6 +80,13 @@ const tests = `
   ok(fs1.includes("vth:1") && fs1.includes("2026-10-11"), "formatAdminStats: top + jours");
   ok(typeof formatAdminStats(null) === "string", "formatAdminStats: robuste au vide");
 
+  // --- sandboxSpawnArgs ---
+  const sb = sandboxSpawnArgs();
+  ok(sb.launcher === "cmd.exe", "sandbox: launcher cmd.exe");
+  ok(sb.args[0] === "/c" && sb.args[1] === "start", "sandbox: start nouveau terminal");
+  ok(sb.args.includes("--sandbox") && sb.args.includes("/k"), "sandbox: flag + /k");
+  ok(sb.args.some((a) => String(a).includes("Sandbox")), "sandbox: titre fenetre");
+
   // --- auraFile ---
   ok(typeof auraFile() === "string", "auraFile: retourne une string (vide si absent)");
 })();
