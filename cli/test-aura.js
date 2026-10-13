@@ -87,6 +87,12 @@ const tests = `
   ok(sb.args.includes("--sandbox") && sb.args.includes("/k"), "sandbox: flag + /k");
   ok(sb.args.some((a) => String(a).includes("Sandbox")), "sandbox: titre fenetre");
 
+  // --- unavailableText ---
+  const u1 = unavailableText("aura-1.3");
+  ok(Array.isArray(u1) && u1.join(" ").includes("préparons Aura 1.3"), "unavailable: 1.3 annonce la préparation");
+  const u2 = unavailableText("aura-2");
+  ok(u2.join(" ").includes("préparons Aura 2"), "unavailable: Aura 2 annoncée");
+
   // --- auraFile ---
   ok(typeof auraFile() === "string", "auraFile: retourne une string (vide si absent)");
 })();

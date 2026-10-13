@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.2" };
+const PKG = { version: "1.4.0.0.3" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -999,6 +999,21 @@ function sandboxSpawnArgs() {
       process.cwd(), "cmd", "/k", ...inner],
   };
 }
+function unavailableText(model) {
+  // Lignes de l'écran "indisponible" (pur, testé).
+  if (model === "aura-2") return ["🔒 AURA 2 — Indisponible pour le moment.", "Nous préparons Aura 2. Reste à l'affût !"];
+  return ["🔒 AURA 1.3 — Indisponible pour le moment.", `Nous préparons Aura 1.3. Sortie : ${AURA13_LAUNCH_LABEL} (dans ${aura13Countdown()}).`];
+}
+function showUnavailable(screen, model) {
+  // Écran "indisponible" : panneau encadré dans le chat.
+  const lines = unavailableText(model);
+  const w = Math.max(...lines.map((l) => l.length));
+  const bar = "═".repeat(w + 4);
+  screen.sys("╔" + bar + "╗");
+  lines.forEach((l) => screen.sys("║  " + l + " ".repeat(Math.max(0, w - l.length)) + "  ║"));
+  screen.sys("╚" + bar + "╝");
+  screen.render();
+}
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
 }
@@ -1614,7 +1629,7 @@ async function cmdSetup() {
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conv" },
-  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"] },
+  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code", "aura-2"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
   { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono", "opencode"] },
@@ -2596,7 +2611,7 @@ async function runTUI(state, updateAvailable) {
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.slice(1).split(" ");
       const arg = rest.join(" ").trim();
-      const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"];
+      const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code", "aura-2"];
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
       const saveCfg = () => {
@@ -2638,11 +2653,13 @@ async function runTUI(state, updateAvailable) {
             return;
           }
           if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
-          if (arg === "aura-1.3" && aura13Locked() && !state.sandbox) {
-            screen.sys(`🔒 Aura 1.3 dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
-            screen.sys("Ouverture de la page d'attente...");
-            openBrowser(AURA13_WAIT_URL);
-            screen.render();
+          if ((arg === "aura-1.3" || arg === "aura-2") && !state.sandbox && (arg === "aura-2" || aura13Locked())) {
+            showUnavailable(screen, arg);
+            if (arg === "aura-1.3") {
+              screen.sys("Ouverture de la page d'attente...");
+              openBrowser(AURA13_WAIT_URL);
+              screen.render();
+            }
             return;
           }
           state.model = arg; saveCfg();
@@ -3996,7 +4013,7 @@ async function main() {
   if (args.includes("--version") || args.includes("-v")) { console.log(`${PKG.version} (build ${buildId()})`); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
-  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code, aura-2)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
   auracode --sandbox       Sandbox admin Aura 1.3 (nouveau terminal via /admin-sandbox)
   Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /admin-sandbox /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
@@ -4070,6 +4087,10 @@ async function main() {
   if (first && !["login", "logout", "new", "setup", "update"].includes(first) && !first.startsWith("-")) {
     // Mode one-shot : auracode "ma question" → réponse directe, sans interface.
     const q = args.join(" ");
+    if ((model === "aura-2" || (model === "aura-1.3" && aura13Locked())) && !sandboxMode) {
+      console.log(unavailableText(model).join("\n"));
+      return;
+    }
     let key = getKey() || await vthAccess() || "";
     if (!key) { console.log("Pas connecté. Lance : auracode login"); return; }
     let sid = getSessionId();

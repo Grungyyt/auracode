@@ -348,6 +348,21 @@ function sandboxSpawnArgs() {
       process.cwd(), "cmd", "/k", ...inner],
   };
 }
+function unavailableText(model) {
+  // Lignes de l'écran "indisponible" (pur, testé).
+  if (model === "aura-2") return ["🔒 AURA 2 — Indisponible pour le moment.", "Nous préparons Aura 2. Reste à l'affût !"];
+  return ["🔒 AURA 1.3 — Indisponible pour le moment.", `Nous préparons Aura 1.3. Sortie : ${AURA13_LAUNCH_LABEL} (dans ${aura13Countdown()}).`];
+}
+function showUnavailable(screen, model) {
+  // Écran "indisponible" : panneau encadré dans le chat.
+  const lines = unavailableText(model);
+  const w = Math.max(...lines.map((l) => l.length));
+  const bar = "═".repeat(w + 4);
+  screen.sys("╔" + bar + "╗");
+  lines.forEach((l) => screen.sys("║  " + l + " ".repeat(Math.max(0, w - l.length)) + "  ║"));
+  screen.sys("╚" + bar + "╝");
+  screen.render();
+}
 function ask(rl, q) {
   return new Promise((res) => rl.question(q + " [o/N] ", (a) => res(/^o(ui)?$/i.test(a.trim()))));
 }
