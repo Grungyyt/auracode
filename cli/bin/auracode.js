@@ -19,7 +19,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.3" };
+const PKG = { version: "1.4.0.0.4" };
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -1001,7 +1001,7 @@ function sandboxSpawnArgs() {
 }
 function unavailableText(model) {
   // Lignes de l'écran "indisponible" (pur, testé).
-  if (model === "aura-2") return ["🔒 AURA 2 — Indisponible pour le moment.", "Nous préparons Aura 2. Reste à l'affût !"];
+  if (model === "aura-2") return ["🔒 AURA 2 — Indisponible pour le moment.", "Nous préparons Aura 2 (Qwen3.8-27B, 27B). Reste à l'affût !"];
   return ["🔒 AURA 1.3 — Indisponible pour le moment.", `Nous préparons Aura 1.3. Sortie : ${AURA13_LAUNCH_LABEL} (dans ${aura13Countdown()}).`];
 }
 function showUnavailable(screen, model) {
