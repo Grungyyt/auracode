@@ -13,7 +13,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.12" };
+const PKG = { version: "1.4.0.0.13" };
 const DISCORD_CLIENT_ID = "1560993453842899165";
 let discordSock = null;
 let discordReady = false;
@@ -105,6 +105,15 @@ function discordClear() {
     cmd: "SET_ACTIVITY",
     args: { pid: process.pid, activity: null, nonce: String(Date.now()) }
   });
+}
+
+function discordStatus() {
+  return {
+    connected: !!discordSock && !discordSock.destroyed,
+    ready: discordReady,
+    pipe: discordSock ? `discord-ipc-${pipeIdx}` : null,
+    clientId: DISCORD_CLIENT_ID
+  };
 }
 
 const ART_LINES = [

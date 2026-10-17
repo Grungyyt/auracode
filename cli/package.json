@@ -1,6 +1,6 @@
 {
   "name": "auracode",
-  "version": "1.4.0.0.12",
+  "version": "1.4.0.0.13",
   "description": "AuraCode — assistant IA terminal connecté au cloud VTH",
   "bin": {
     "auracode": "./bin/auracode.js"

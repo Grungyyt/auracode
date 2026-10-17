@@ -20,7 +20,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.12" };
+const PKG = { version: "1.4.0.0.13" };
 const DISCORD_CLIENT_ID = "1560993453842899165";
 let discordSock = null;
 let discordReady = false;
@@ -112,6 +112,15 @@ function discordClear() {
     cmd: "SET_ACTIVITY",
     args: { pid: process.pid, activity: null, nonce: String(Date.now()) }
   });
+}
+
+function discordStatus() {
+  return {
+    connected: !!discordSock && !discordSock.destroyed,
+    ready: discordReady,
+    pipe: discordSock ? `discord-ipc-${pipeIdx}` : null,
+    clientId: DISCORD_CLIENT_ID
+  };
 }
 
 const ART_LINES = [
@@ -1833,6 +1842,7 @@ const COMMANDS = [
   { name: "/permissions", desc: "Voir les règles auto" },
   { name: "/admin-stats", desc: "Stats globales (admin)" },
   { name: "/admin-sandbox", desc: "Sandbox 1.3 bêta (admin, nouveau terminal)" },
+  { name: "/reach", desc: "Test RPC Discord (diagnostic)" },
   { name: "/allow", desc: "Toujours autoriser : /allow <outil>" },
   { name: "/deny", desc: "Toujours refuser : /deny <outil>" },
   { name: "/clear", desc: "Effacer l'écran" },
@@ -3945,6 +3955,15 @@ async function runTUI(state, updateAvailable) {
           screen.busy = false; screen.render();
           return;
         }
+        case "reach": {
+          const st = discordStatus();
+          screen.sys("Discord RPC : " + (st.connected ? "connecté au pipe " + st.pipe : "déconnecté"));
+          screen.sys("Discord RPC : " + (st.ready ? "READY (présence active)" : "pas de READY (Discord fermé ou appli invalide)"));
+          screen.sys("Application ID : " + st.clientId);
+          screen.sys("Tape /model aura-1.2 pour envoyer la présence.");
+          screen.render();
+          return;
+        }
         case "conv": {
           let list = [];
           try {
@@ -4114,7 +4133,7 @@ async function main() {
   auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code, aura-2)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
   auracode --sandbox       Sandbox admin Aura 1.3 (nouveau terminal via /admin-sandbox)
-  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /admin-sandbox /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
+  Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /admin-sandbox /reach /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
     return;
   }
   purgeStoredSecrets();

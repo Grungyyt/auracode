@@ -379,6 +379,7 @@ const COMMANDS = [
   { name: "/permissions", desc: "Voir les règles auto" },
   { name: "/admin-stats", desc: "Stats globales (admin)" },
   { name: "/admin-sandbox", desc: "Sandbox 1.3 bêta (admin, nouveau terminal)" },
+  { name: "/reach", desc: "Test RPC Discord (diagnostic)" },
   { name: "/allow", desc: "Toujours autoriser : /allow <outil>" },
   { name: "/deny", desc: "Toujours refuser : /deny <outil>" },
   { name: "/clear", desc: "Effacer l'écran" },
