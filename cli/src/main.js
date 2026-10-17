@@ -1557,6 +1557,98 @@ async function runTUI(state, updateAvailable) {
           screen.sys(ch.repeat(40));
           return;
         }
+        case "disk": {
+          const d = diskUsage(process.cwd());
+          screen.sys("Disque : " + Math.round(d.used / 1024 / 1024 / 1024 * 10) / 10 + " Go / " + Math.round(d.total / 1024 / 1024 / 1024 * 10) / 10 + " Go (" + d.pct + "% utilisé)");
+          return;
+        }
+        case "cpu": {
+          screen.sys(cpuInfo());
+          return;
+        }
+        case "mem": case "ram": {
+          const m = memInfo();
+          screen.sys("RAM : " + Math.round(m.used / 1024 / 1024) + " Mo / " + Math.round(m.total / 1024 / 1024) + " Mo (" + m.pct + "% utilisé)");
+          return;
+        }
+        case "uptime": {
+          screen.sys("Démarré il y a : " + sysUptimeBoot());
+          return;
+        }
+        case "env": {
+          if (!arg) { screen.sys(envAll()); return; }
+          screen.sys(arg + " = " + envVar(arg));
+          return;
+        }
+        case "whoami": {
+          screen.sys(whoami());
+          return;
+        }
+        case "hostname": {
+          screen.sys(hostname());
+          return;
+        }
+        case "ip": {
+          screen.sys(localIp());
+          return;
+        }
+        case "pubip": {
+          screen.busy = true; screen.render();
+          try { screen.sys("IP publique : " + await publicIp()); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "netstat": {
+          screen.sys(netIfaces());
+          return;
+        }
+        case "ps": {
+          screen.busy = true; screen.render();
+          try { screen.sys(await psList()); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "kill": {
+          if (!arg) { screen.sys("Usage : /kill <pid>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await killPid(arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "which": {
+          if (!arg) { screen.sys("Usage : /which <commande>"); return; }
+          screen.sys(await whichCmd(arg));
+          return;
+        }
+        case "path": {
+          screen.sys(process.env.PATH || "");
+          return;
+        }
+        case "hex": {
+          if (!arg) { screen.sys("Usage : /hex <fichier>"); return; }
+          screen.sys(hexDump(arg));
+          return;
+        }
+        case "lines": {
+          if (!arg) { screen.sys("Usage : /lines <fichier>"); return; }
+          screen.sys(countLines(arg));
+          return;
+        }
+        case "words": {
+          if (!arg) { screen.sys("Usage : /words <fichier>"); return; }
+          screen.sys(countWords(arg));
+          return;
+        }
+        case "grep": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /grep <motif> <fichier>"); return; }
+          screen.sys(grepFile(parts[0], parts.slice(1).join(" ")));
+          return;
+        }
+        case "arch": {
+          screen.sys(sysArch());
+          return;
+        }
         case "conv": {
           let list = [];
           try {

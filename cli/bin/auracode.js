@@ -22,7 +22,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.16" };
+const PKG = { version: "1.4.0.0.17" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -237,6 +237,130 @@ const fortunes = [
   "Une rencontre marquante approche."
 ];
 const randomFortune = () => fortunes[Math.floor(Math.random() * fortunes.length)];
+// ---------- Système ----------
+const cpuInfo = () => {
+  try {
+    const cpus = os.cpus();
+    const model = cpus[0] ? cpus[0].model : "inconnu";
+    const speed = cpus[0] ? cpus[0].speed : 0;
+    return model + " ×" + cpus.length + " (" + speed + " MHz)";
+  } catch { return "inconnu"; }
+};
+const memInfo = () => {
+  const total = os.totalmem();
+  const free = os.freemem();
+  const used = total - free;
+  return { total, free, used, pct: total ? Math.round((used / total) * 100) : 0 };
+};
+const sysUptime = () => {
+  const s = Math.floor(process.uptime());
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return padLeft(h, 2) + ":" + padLeft(m, 2) + ":" + padLeft(sec, 2);
+};
+const sysUptimeBoot = () => {
+  try {
+    const up = os.uptime();
+    const h = Math.floor(up / 3600);
+    const m = Math.floor((up % 3600) / 60);
+    const sec = Math.floor(up % 60);
+    return padLeft(h, 2) + ":" + padLeft(m, 2) + ":" + padLeft(sec, 2);
+  } catch { return "inconnu"; }
+};
+const envVar = (name) => process.env[name] || "(non définie)";
+const envAll = () => {
+  const keys = Object.keys(process.env).sort();
+  return keys.map((k) => k + "=" + process.env[k]).join("\n");
+};
+const whoami = () => {
+  try { return os.userInfo().username || require("os").userInfo().username; } catch { return "inconnu"; }
+};
+const hostname = () => os.hostname();
+const localIp = () => {
+  try {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === "IPv4" && !net.internal) return net.address;
+      }
+    }
+  } catch { /* ignore */ }
+  return "inconnu";
+};
+const publicIp = async () => {
+  try {
+    const r = await httpGet("https://api.ipify.org?format=json", 5000);
+    return JSON.parse(r.body || "{}").ip || "inconnu";
+  } catch { return "inconnu"; }
+};
+const netIfaces = () => {
+  try {
+    const nets = os.networkInterfaces();
+    const out = [];
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        out.push(name + " : " + net.family + " " + net.address + (net.internal ? " (loopback)" : ""));
+      }
+    }
+    return out.join("\n") || "aucune interface";
+  } catch { return "inconnu"; }
+};
+const psList = async () => {
+  try {
+    const cmd = process.platform === "win32" ? "tasklist" : "ps -eo pid,comm,%cpu,%mem";
+    const r = await execPromise(cmd);
+    return (r.stdout || "").slice(0, 8000) || "(vide)";
+  } catch (e) { return e.message; }
+};
+const killPid = async (pid) => {
+  try {
+    const cmd = process.platform === "win32" ? "taskkill /PID " + pid + " /F" : "kill " + pid;
+    const r = await execPromise(cmd);
+    return (r.stdout || r.stderr || "terminé").slice(0, 1000);
+  } catch (e) { return e.message; }
+};
+const whichCmd = async (cmd) => {
+  try {
+    const c = process.platform === "win32" ? "where " + cmd : "which " + cmd;
+    const r = await execPromise(c);
+    return (r.stdout || "introuvable").slice(0, 2000);
+  } catch { return "introuvable"; }
+};
+const hexDump = (file) => {
+  try {
+    const data = fs.readFileSync(file);
+    let out = "";
+    for (let i = 0; i < Math.min(data.length, 256); i += 16) {
+      const hex = data.slice(i, i + 16).map((b) => padLeft(b.toString(16), 2)).join(" ");
+      const asc = data.slice(i, i + 16).map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
+      out += padLeft(i.toString(16), 4) + "  " + padRight(hex, 47) + "  " + asc + "\n";
+    }
+    return out || "(vide)";
+  } catch (e) { return e.message; }
+};
+const countLines = (file) => {
+  try { return fs.readFileSync(file, "utf8").split("\n").length + " lignes"; } catch (e) { return e.message; }
+};
+const countWords = (file) => {
+  try { return fs.readFileSync(file, "utf8").split(/\s+/).filter(Boolean).length + " mots"; } catch (e) { return e.message; }
+};
+const grepFile = (pattern, file) => {
+  try {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const re = new RegExp(pattern);
+    const hits = lines.filter((l) => re.test(l));
+    return hits.length ? hits.slice(0, 30).join("\n") : "aucune correspondance";
+  } catch (e) { return e.message; }
+};
+const sysArch = () => os.arch() + " " + os.platform() + " " + os.release();
+const execPromise = (cmd) =>
+  new Promise((resolve, reject) => {
+    exec(cmd, { timeout: 15000, maxBuffer: 1024 * 1000 }, (err, stdout, stderr) => {
+      if (err) reject(err || new Error(stderr || "erreur inconnue"));
+      else resolve({ stdout, stderr });
+    });
+  });
 
 // ---------- Mise en avant / présentation ----------
 const boxChars = { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" };
@@ -4452,6 +4576,98 @@ async function runTUI(state, updateAvailable) {
         case "sep": {
           const ch = arg || "─";
           screen.sys(ch.repeat(40));
+          return;
+        }
+        case "disk": {
+          const d = diskUsage(process.cwd());
+          screen.sys("Disque : " + Math.round(d.used / 1024 / 1024 / 1024 * 10) / 10 + " Go / " + Math.round(d.total / 1024 / 1024 / 1024 * 10) / 10 + " Go (" + d.pct + "% utilisé)");
+          return;
+        }
+        case "cpu": {
+          screen.sys(cpuInfo());
+          return;
+        }
+        case "mem": case "ram": {
+          const m = memInfo();
+          screen.sys("RAM : " + Math.round(m.used / 1024 / 1024) + " Mo / " + Math.round(m.total / 1024 / 1024) + " Mo (" + m.pct + "% utilisé)");
+          return;
+        }
+        case "uptime": {
+          screen.sys("Démarré il y a : " + sysUptimeBoot());
+          return;
+        }
+        case "env": {
+          if (!arg) { screen.sys(envAll()); return; }
+          screen.sys(arg + " = " + envVar(arg));
+          return;
+        }
+        case "whoami": {
+          screen.sys(whoami());
+          return;
+        }
+        case "hostname": {
+          screen.sys(hostname());
+          return;
+        }
+        case "ip": {
+          screen.sys(localIp());
+          return;
+        }
+        case "pubip": {
+          screen.busy = true; screen.render();
+          try { screen.sys("IP publique : " + await publicIp()); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "netstat": {
+          screen.sys(netIfaces());
+          return;
+        }
+        case "ps": {
+          screen.busy = true; screen.render();
+          try { screen.sys(await psList()); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "kill": {
+          if (!arg) { screen.sys("Usage : /kill <pid>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await killPid(arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "which": {
+          if (!arg) { screen.sys("Usage : /which <commande>"); return; }
+          screen.sys(await whichCmd(arg));
+          return;
+        }
+        case "path": {
+          screen.sys(process.env.PATH || "");
+          return;
+        }
+        case "hex": {
+          if (!arg) { screen.sys("Usage : /hex <fichier>"); return; }
+          screen.sys(hexDump(arg));
+          return;
+        }
+        case "lines": {
+          if (!arg) { screen.sys("Usage : /lines <fichier>"); return; }
+          screen.sys(countLines(arg));
+          return;
+        }
+        case "words": {
+          if (!arg) { screen.sys("Usage : /words <fichier>"); return; }
+          screen.sys(countWords(arg));
+          return;
+        }
+        case "grep": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /grep <motif> <fichier>"); return; }
+          screen.sys(grepFile(parts[0], parts.slice(1).join(" ")));
+          return;
+        }
+        case "arch": {
+          screen.sys(sysArch());
           return;
         }
         case "conv": {
