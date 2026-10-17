@@ -1291,6 +1291,142 @@ async function runTUI(state, updateAvailable) {
           screen.render();
           return;
         }
+        case "ping": {
+          if (!arg) { screen.sys("Usage : /ping <url>"); return; }
+          screen.busy = true; screen.render();
+          try {
+            const r = await pingUrl(arg.startsWith("http") ? arg : "https://" + arg);
+            screen.sys((r.ok ? "✓ " : "✗ ") + arg + " — " + (r.ms ? r.ms + " ms" : "timeout") + (r.status ? " (HTTP " + r.status + ")" : "") + (r.error ? " — " + r.error : ""));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "dns": {
+          if (!arg) { screen.sys("Usage : /dns <domaine>"); return; }
+          try {
+            const r = await resolveDns(arg);
+            screen.sys(arg + " → " + r.address + " (" + r.family + ")");
+          } catch (e) { screen.sys("Erreur DNS : " + e.message); }
+          return;
+        }
+        case "hash": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const algo = (parts[0] || "sha256").toLowerCase();
+          const text = parts.slice(1).join(" ");
+          if (!text) { screen.sys("Usage : /hash <sha256|sha1|md5> <texte>"); return; }
+          if (!["sha256","sha1","md5"].includes(algo)) { screen.sys("Algos : sha256, sha1, md5"); return; }
+          screen.sys(algo.toUpperCase() + "(" + text + ") = " + hashStr(algo, text));
+          return;
+        }
+        case "passgen": {
+          const len = parseInt(arg, 10) || 16;
+          screen.sys(randPass(len));
+          return;
+        }
+        case "qr": {
+          if (!arg) { screen.sys("Usage : /qr <texte>"); return; }
+          screen.sys("QR : " + qrUrl(arg));
+          return;
+        }
+        case "bmi": {
+          const parts = String(arg).split(/\s+/).filter(Boolean).map(Number);
+          if (parts.length < 2) { screen.sys("Usage : /bmi <poids kg> <taille cm>"); return; }
+          const r = calcBmi(parts[0], parts[1]);
+          screen.sys("IMC : " + r.bmi + " — " + r.label);
+          return;
+        }
+        case "age": {
+          if (!arg) { screen.sys("Usage : /age <YYYY-MM-DD>"); return; }
+          screen.sys("Âge : " + calcAge(arg) + " ans");
+          return;
+        }
+        case "geo": {
+          if (!arg) { screen.sys("Usage : /geo <ip>"); return; }
+          try {
+            const r = await httpGet("https://ipapi.co/" + arg + "/json/");
+            screen.sys(arg + " — " + (r.body ? (JSON.parse(r.body).country_name || "inconnu") + " / " + (JSON.parse(r.body).city || "inconnu") : "erreur"));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "short": {
+          if (!arg) { screen.sys("Usage : /short <url>"); return; }
+          try {
+            const r = await httpGet("https://tinyurl.com/api-create.php?url=" + encodeURIComponent(arg));
+            screen.sys(r.body || "Erreur");
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "headers": {
+          if (!arg) { screen.sys("Usage : /headers <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            const h = r.headers || {};
+            screen.sys("Status : " + r.status);
+            for (const k of ["content-type","server","x-powered-by","cache-date","location"]) {
+              if (h[k]) screen.sys("  " + k + " : " + h[k]);
+            }
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "meta": {
+          if (!arg) { screen.sys("Usage : /meta <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            const body = r.body || "";
+            const m = body.match(/<meta[^>]+>/gi) || [];
+            m.forEach((x) => screen.sys(x.slice(0, 120)));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "status": {
+          if (!arg) { screen.sys("Usage : /status <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            screen.sys(arg + " → HTTP " + r.status);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "extract": {
+          if (!arg) { screen.sys("Usage : /extract <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            const links = (r.body || "").match(/<a[^>]+href=["']([^"']+)["']/gi) || [];
+            links.slice(0, 15).forEach((l) => {
+              const m = l.match(/href=["']([^"']+)["']/);
+              if (m) screen.sys(m[1]);
+            });
+            if (!links.length) screen.sys("Aucun lien trouvé.");
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "b64enc": {
+          if (!arg) { screen.sys("Usage : /b64enc <texte>"); return; }
+          screen.sys(b64enc(arg));
+          return;
+        }
+        case "b64dec": {
+          if (!arg) { screen.sys("Usage : /b64dec <base64>"); return; }
+          try { screen.sys(b64dec(arg)); } catch { screen.sys("Base64 invalide."); }
+          return;
+        }
+        case "rot13": {
+          if (!arg) { screen.sys("Usage : /rot13 <texte>"); return; }
+          screen.sys(rot13(arg));
+          return;
+        }
+        case "ascii": {
+          if (!arg) { screen.sys("Usage : /ascii <texte>"); return; }
+          screen.sys(asciiFiglet(arg));
+          return;
+        }
+        case "emoji": {
+          screen.sys(randomEmoji());
+          return;
+        }
+        case "fortune": {
+          screen.sys(randomFortune());
+          return;
+        }
         case "conv": {
           let list = [];
           try {

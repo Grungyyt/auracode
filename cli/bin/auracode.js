@@ -14,13 +14,15 @@ const readline = require("readline");
 const crypto = require("crypto");
 const net = require("net");
 const { exec, execSync, spawn } = require("child_process");
+const https = require("https");
+const http = require("http");
 
 const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.14" };
+const PKG = { version: "1.4.0.0.15" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -122,6 +124,151 @@ function discordStatus() {
     clientId: DISCORD_CLIENT_ID
   };
 }
+
+// ---------- Helpers HTTP / réseau ----------
+const httpGet = (url, timeout = 10000) =>
+  new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === "https:" ? https : http;
+    const req = lib.get(
+      u,
+      { timeout, headers: { "User-Agent": "AuraCode/1.4" } },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+  });
+
+const httpPost = (url, body, timeout = 10000) =>
+  new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === "https:" ? https : http;
+    const payload = typeof body === "string" ? body : JSON.stringify(body);
+    const req = lib.request(
+      u,
+      {
+        method: "POST",
+        timeout,
+        headers: {
+          "User-Agent": "AuraCode/1.4",
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload)
+        }
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+
+const resolveDns = (host) =>
+  new Promise((resolve, reject) => {
+    dns.lookup(host, (err, address, family) =>
+      err ? reject(err) : resolve({ address, family: family === 4 ? "IPv4" : "IPv6" })
+    );
+  });
+
+const dns = require("dns");
+
+const hashStr = (algo, text) => crypto.createHash(algo).update(text).digest("hex");
+
+const randPass = (len = 16) => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+  let out = "";
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+};
+
+const b64enc = (t) => Buffer.from(t).toString("base64");
+const b64dec = (t) => Buffer.from(t, "base64").toString("utf8");
+
+const rot13 = (t) => t.replace(/[a-zA-Z]/g, (c) =>
+  String.fromCharCode(((c <= "Z" ? 65 : 97) + ((c.toUpperCase().charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26)))
+);
+
+const qrUrl = (text) => `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(text)}`;
+
+const pingUrl = async (url) => {
+  const t0 = Date.now();
+  try {
+    const r = await httpGet(url, 5000);
+    return { ok: true, ms: Date.now() - t0, status: r.status };
+  } catch (e) { return { ok: false, ms: Date.now() - t0, error: e.message }; }
+};
+
+const calcBmi = (weightKg, heightCm) => {
+  const h = heightKg ? heightKg / 100 : heightKg / 100;
+  const bmi = weightKg / (h * h);
+  return { bmi: Math.round(bmi * 10) / 10, label: bmi < 18.5 ? "maigreur" : bmi < 25 ? "normal" : bmi < 30 ? "surpoids" : "obésité" };
+};
+
+const calcAge = (dateStr) => {
+  const d = new Date(dateStr);
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age;
+};
+
+const emojiList = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","😮","😯","😲","😳","😦","😧","😨","😰","😥","😢","😭","😱","😖","😣","😩","😫","😤","😠","😡","🤬","😈","👿","💀","💩","🤡","👹","👺","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😺","😸","😹","😻","😼","😽","🙀","😿","😾"];
+const randomEmoji = () => emojiList[Math.floor(Math.random() * emojiList.length)];
+
+const fortunes = [
+  "La chance sourit aux audacieux.",
+  "Une surprise agréable vous attend cette semaine.",
+  "Ne craignez pas le changement, embrassez-le.",
+  "Votre travail acharné portera bientôt ses fruits.",
+  "L'amitié véritable est un trésor inestimable.",
+  "Une opportunité inattendue se présente à vous.",
+  "La patience est la clé du succès.",
+  "Vous allez découvrir quelque chose d'extraordinaire.",
+  "Écoutez votre intuition, elle ne vous trompe pas.",
+  "Une rencontre marquante approche."
+];
+const randomFortune = () => fortunes[Math.floor(Math.random() * fortunes.length)];
+
+const asciiFiglet = (text) => {
+  const map = {
+    "A":"  /\\  \n /__\\\n|    |",
+    "B":"|--|\n|__|",
+    "C":" ___\n|   \n|__ ",
+    "D":"|--\n|__",
+    "E":"|---\n|   \n|---",
+    "F":"|---\n|   \n|  ",
+    "G":" ___\n|   \n|__ ",
+    "H":"| | \n|-- \n| | ",
+    "I":"---\n | \n---",
+    "J":"   |\n   |\n__| ",
+    "K":"| |\n|--\n| | ",
+    "L":"|  \n|  \n|__",
+    "M":"| | | | \n| | | | \n| |_| |",
+    "N":"|  |\n|   |\n|    |",
+    "O":" ___\n/   \\\n\\___/",
+    "P":"|--\n|--\n|  ",
+    "Q":" ___\n/   \\\n\\__/ ",
+    "R":"|--\n|--\n| \\ ",
+    "S":" ___\n   \n ___",
+    "T":"---\n | \n | ",
+    "U":"| |\n| |\n|_| ",
+    "V":"| |\n| | \n \\| ",
+    "W":"| | |\n| | | \n|_|_|",
+    "X":"| | \n| | \n \\| ",
+    "Y":"| |\n| | \n |  ",
+    "Z":"----\n   |\n----"
+  };
+  return text.toUpperCase().split("").map((c) => map[c] || c).join("\n");
+};
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
@@ -3962,6 +4109,142 @@ async function runTUI(state, updateAvailable) {
           screen.sys("Application ID : " + st.clientId);
           screen.sys("Tape /model aura-1.2 pour envoyer la présence.");
           screen.render();
+          return;
+        }
+        case "ping": {
+          if (!arg) { screen.sys("Usage : /ping <url>"); return; }
+          screen.busy = true; screen.render();
+          try {
+            const r = await pingUrl(arg.startsWith("http") ? arg : "https://" + arg);
+            screen.sys((r.ok ? "✓ " : "✗ ") + arg + " — " + (r.ms ? r.ms + " ms" : "timeout") + (r.status ? " (HTTP " + r.status + ")" : "") + (r.error ? " — " + r.error : ""));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "dns": {
+          if (!arg) { screen.sys("Usage : /dns <domaine>"); return; }
+          try {
+            const r = await resolveDns(arg);
+            screen.sys(arg + " → " + r.address + " (" + r.family + ")");
+          } catch (e) { screen.sys("Erreur DNS : " + e.message); }
+          return;
+        }
+        case "hash": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const algo = (parts[0] || "sha256").toLowerCase();
+          const text = parts.slice(1).join(" ");
+          if (!text) { screen.sys("Usage : /hash <sha256|sha1|md5> <texte>"); return; }
+          if (!["sha256","sha1","md5"].includes(algo)) { screen.sys("Algos : sha256, sha1, md5"); return; }
+          screen.sys(algo.toUpperCase() + "(" + text + ") = " + hashStr(algo, text));
+          return;
+        }
+        case "passgen": {
+          const len = parseInt(arg, 10) || 16;
+          screen.sys(randPass(len));
+          return;
+        }
+        case "qr": {
+          if (!arg) { screen.sys("Usage : /qr <texte>"); return; }
+          screen.sys("QR : " + qrUrl(arg));
+          return;
+        }
+        case "bmi": {
+          const parts = String(arg).split(/\s+/).filter(Boolean).map(Number);
+          if (parts.length < 2) { screen.sys("Usage : /bmi <poids kg> <taille cm>"); return; }
+          const r = calcBmi(parts[0], parts[1]);
+          screen.sys("IMC : " + r.bmi + " — " + r.label);
+          return;
+        }
+        case "age": {
+          if (!arg) { screen.sys("Usage : /age <YYYY-MM-DD>"); return; }
+          screen.sys("Âge : " + calcAge(arg) + " ans");
+          return;
+        }
+        case "geo": {
+          if (!arg) { screen.sys("Usage : /geo <ip>"); return; }
+          try {
+            const r = await httpGet("https://ipapi.co/" + arg + "/json/");
+            screen.sys(arg + " — " + (r.body ? (JSON.parse(r.body).country_name || "inconnu") + " / " + (JSON.parse(r.body).city || "inconnu") : "erreur"));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "short": {
+          if (!arg) { screen.sys("Usage : /short <url>"); return; }
+          try {
+            const r = await httpGet("https://tinyurl.com/api-create.php?url=" + encodeURIComponent(arg));
+            screen.sys(r.body || "Erreur");
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "headers": {
+          if (!arg) { screen.sys("Usage : /headers <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            const h = r.headers || {};
+            screen.sys("Status : " + r.status);
+            for (const k of ["content-type","server","x-powered-by","cache-date","location"]) {
+              if (h[k]) screen.sys("  " + k + " : " + h[k]);
+            }
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "meta": {
+          if (!arg) { screen.sys("Usage : /meta <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            const body = r.body || "";
+            const m = body.match(/<meta[^>]+>/gi) || [];
+            m.forEach((x) => screen.sys(x.slice(0, 120)));
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "status": {
+          if (!arg) { screen.sys("Usage : /status <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            screen.sys(arg + " → HTTP " + r.status);
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "extract": {
+          if (!arg) { screen.sys("Usage : /extract <url>"); return; }
+          try {
+            const r = await httpGet(arg.startsWith("http") ? arg : "https://" + arg);
+            const links = (r.body || "").match(/<a[^>]+href=["']([^"']+)["']/gi) || [];
+            links.slice(0, 15).forEach((l) => {
+              const m = l.match(/href=["']([^"']+)["']/);
+              if (m) screen.sys(m[1]);
+            });
+            if (!links.length) screen.sys("Aucun lien trouvé.");
+          } catch (e) { screen.sys("Erreur : " + e.message); }
+          return;
+        }
+        case "b64enc": {
+          if (!arg) { screen.sys("Usage : /b64enc <texte>"); return; }
+          screen.sys(b64enc(arg));
+          return;
+        }
+        case "b64dec": {
+          if (!arg) { screen.sys("Usage : /b64dec <base64>"); return; }
+          try { screen.sys(b64dec(arg)); } catch { screen.sys("Base64 invalide."); }
+          return;
+        }
+        case "rot13": {
+          if (!arg) { screen.sys("Usage : /rot13 <texte>"); return; }
+          screen.sys(rot13(arg));
+          return;
+        }
+        case "ascii": {
+          if (!arg) { screen.sys("Usage : /ascii <texte>"); return; }
+          screen.sys(asciiFiglet(arg));
+          return;
+        }
+        case "emoji": {
+          screen.sys(randomEmoji());
+          return;
+        }
+        case "fortune": {
+          screen.sys(randomFortune());
           return;
         }
         case "conv": {

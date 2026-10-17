@@ -7,13 +7,15 @@ const readline = require("readline");
 const crypto = require("crypto");
 const net = require("net");
 const { exec, execSync, spawn } = require("child_process");
+const https = require("https");
+const http = require("http");
 
 const HOME = path.join(os.homedir(), ".auracode");
 const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.14" };
+const PKG = { version: "1.4.0.0.15" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -115,6 +117,151 @@ function discordStatus() {
     clientId: DISCORD_CLIENT_ID
   };
 }
+
+// ---------- Helpers HTTP / réseau ----------
+const httpGet = (url, timeout = 10000) =>
+  new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === "https:" ? https : http;
+    const req = lib.get(
+      u,
+      { timeout, headers: { "User-Agent": "AuraCode/1.4" } },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+  });
+
+const httpPost = (url, body, timeout = 10000) =>
+  new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === "https:" ? https : http;
+    const payload = typeof body === "string" ? body : JSON.stringify(body);
+    const req = lib.request(
+      u,
+      {
+        method: "POST",
+        timeout,
+        headers: {
+          "User-Agent": "AuraCode/1.4",
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload)
+        }
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+      }
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+
+const resolveDns = (host) =>
+  new Promise((resolve, reject) => {
+    dns.lookup(host, (err, address, family) =>
+      err ? reject(err) : resolve({ address, family: family === 4 ? "IPv4" : "IPv6" })
+    );
+  });
+
+const dns = require("dns");
+
+const hashStr = (algo, text) => crypto.createHash(algo).update(text).digest("hex");
+
+const randPass = (len = 16) => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+  let out = "";
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+};
+
+const b64enc = (t) => Buffer.from(t).toString("base64");
+const b64dec = (t) => Buffer.from(t, "base64").toString("utf8");
+
+const rot13 = (t) => t.replace(/[a-zA-Z]/g, (c) =>
+  String.fromCharCode(((c <= "Z" ? 65 : 97) + ((c.toUpperCase().charCodeAt(0) - (c <= "Z" ? 65 : 97) + 13) % 26)))
+);
+
+const qrUrl = (text) => `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(text)}`;
+
+const pingUrl = async (url) => {
+  const t0 = Date.now();
+  try {
+    const r = await httpGet(url, 5000);
+    return { ok: true, ms: Date.now() - t0, status: r.status };
+  } catch (e) { return { ok: false, ms: Date.now() - t0, error: e.message }; }
+};
+
+const calcBmi = (weightKg, heightCm) => {
+  const h = heightKg ? heightKg / 100 : heightKg / 100;
+  const bmi = weightKg / (h * h);
+  return { bmi: Math.round(bmi * 10) / 10, label: bmi < 18.5 ? "maigreur" : bmi < 25 ? "normal" : bmi < 30 ? "surpoids" : "obésité" };
+};
+
+const calcAge = (dateStr) => {
+  const d = new Date(dateStr);
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age;
+};
+
+const emojiList = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","😮","😯","😲","😳","😦","😧","😨","😰","😥","😢","😭","😱","😖","😣","😩","😫","😤","😠","😡","🤬","😈","👿","💀","💩","🤡","👹","👺","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😺","😸","😹","😻","😼","😽","🙀","😿","😾"];
+const randomEmoji = () => emojiList[Math.floor(Math.random() * emojiList.length)];
+
+const fortunes = [
+  "La chance sourit aux audacieux.",
+  "Une surprise agréable vous attend cette semaine.",
+  "Ne craignez pas le changement, embrassez-le.",
+  "Votre travail acharné portera bientôt ses fruits.",
+  "L'amitié véritable est un trésor inestimable.",
+  "Une opportunité inattendue se présente à vous.",
+  "La patience est la clé du succès.",
+  "Vous allez découvrir quelque chose d'extraordinaire.",
+  "Écoutez votre intuition, elle ne vous trompe pas.",
+  "Une rencontre marquante approche."
+];
+const randomFortune = () => fortunes[Math.floor(Math.random() * fortunes.length)];
+
+const asciiFiglet = (text) => {
+  const map = {
+    "A":"  /\\  \n /__\\\n|    |",
+    "B":"|--|\n|__|",
+    "C":" ___\n|   \n|__ ",
+    "D":"|--\n|__",
+    "E":"|---\n|   \n|---",
+    "F":"|---\n|   \n|  ",
+    "G":" ___\n|   \n|__ ",
+    "H":"| | \n|-- \n| | ",
+    "I":"---\n | \n---",
+    "J":"   |\n   |\n__| ",
+    "K":"| |\n|--\n| | ",
+    "L":"|  \n|  \n|__",
+    "M":"| | | | \n| | | | \n| |_| |",
+    "N":"|  |\n|   |\n|    |",
+    "O":" ___\n/   \\\n\\___/",
+    "P":"|--\n|--\n|  ",
+    "Q":" ___\n/   \\\n\\__/ ",
+    "R":"|--\n|--\n| \\ ",
+    "S":" ___\n   \n ___",
+    "T":"---\n | \n | ",
+    "U":"| |\n| |\n|_| ",
+    "V":"| |\n| | \n \\| ",
+    "W":"| | |\n| | | \n|_|_|",
+    "X":"| | \n| | \n \\| ",
+    "Y":"| |\n| | \n |  ",
+    "Z":"----\n   |\n----"
+  };
+  return text.toUpperCase().split("").map((c) => map[c] || c).join("\n");
+};
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
