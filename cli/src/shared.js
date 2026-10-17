@@ -13,13 +13,13 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.7" };
+const PKG = { version: "1.4.0.0.8" };
 const DISCORD_CLIENT_ID = "1555989312846168135";
 let discordSock = null;
 let discordReady = false;
 let discordPending = [];
 const DISCORD_START = Date.now();
-const DISCORD_PIPE = "\\\\.\\pipe\\discord-ipc-0";
+let pipeIdx = 0;
 
 function discordFrame(obj) {
   const str = JSON.stringify(obj);
@@ -38,29 +38,45 @@ function discordSendRaw(obj) {
   try { discordSock.write(discordFrame(obj)); } catch { /* ignore */ }
 }
 
-function discordConnect() {
-  if (!discordSock) {
-    try {
-      discordSock = net.createConnection(DISCORD_PIPE);
-      discordSock.on("connect", () => discordSendRaw({ v: 1, client_id: DISCORD_CLIENT_ID }));
-      discordSock.on("data", (chunk) => {
-        try {
-          const m = JSON.parse(chunk.toString("utf8", 4));
-          if (m && m.evt === "READY") {
-            discordReady = true;
-            while (discordPending.length) discordSendRaw(discordPending.shift());
-          }
-        } catch { /* ignore */ }
-      });
-      discordSock.on("error", () => { /* ignore */ });
-      discordSock.on("close", () => {
-        discordSock = null;
-        discordReady = false;
-        setTimeout(discordConnect, 15000);
-      });
-    } catch { /* ignore */ }
-  }
+function discordTryPipe(i) {
+  try {
+    const s = net.createConnection(`\\\\.\\pipe\\discord-ipc-${i}`);
+    let buf = Buffer.alloc(0);
+    s.on("connect", () => {
+      discordSock = s;
+      pipeIdx = i;
+      discordSendRaw({ v: 1, client_id: DISCORD_CLIENT_ID });
+    });
+    s.on("data", (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 4) {
+        const len = buf.readUInt32LE(0);
+        if (buf.length < 4 + len) break;
+        const payload = JSON.parse(buf.slice(4, 4 + len).toString("utf8"));
+        buf = buf.slice(4 + len);
+        if (payload && payload.evt === "READY") {
+          discordReady = true;
+          while (discordPending.length) discordSendRaw(discordPending.shift());
+        }
+      }
+    });
+    s.on("error", () => { try { s.destroy(); } catch { /* ignore */ } });
+    s.on("close", () => {
+      if (discordSock === s) { discordSock = null; discordReady = false; setTimeout(discordReconnect, 15000); }
+    });
+    return true;
+  } catch { return false; }
 }
+
+function discordConnect() {
+  if (discordSock) return;
+  for (let i = 0; i < 10; i++) {
+    if (discordTryPipe(i)) return;
+  }
+  setTimeout(discordConnect, 15000);
+}
+
+function discordReconnect() { discordConnect(); }
 
 function discordPresence(state, details) {
   discordSendRaw({
