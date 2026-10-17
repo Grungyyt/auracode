@@ -13,8 +13,8 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.11" };
-const DISCORD_CLIENT_ID = "1560983341488930816";
+const PKG = { version: "1.4.0.0.12" };
+const DISCORD_CLIENT_ID = "1560993453842899165";
 let discordSock = null;
 let discordReady = false;
 let discordPending = [];
