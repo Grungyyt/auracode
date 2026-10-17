@@ -20,7 +20,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.8" };
+const PKG = { version: "1.4.0.0.9" };
 const DISCORD_CLIENT_ID = "1555989312846168135";
 let discordSock = null;
 let discordReady = false;
@@ -55,17 +55,21 @@ function discordTryPipe(i) {
       discordSendRaw({ v: 1, client_id: DISCORD_CLIENT_ID });
     });
     s.on("data", (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      while (buf.length >= 4) {
-        const len = buf.readUInt32LE(0);
-        if (buf.length < 4 + len) break;
-        const payload = JSON.parse(buf.slice(4, 4 + len).toString("utf8"));
-        buf = buf.slice(4 + len);
-        if (payload && payload.evt === "READY") {
-          discordReady = true;
-          while (discordPending.length) discordSendRaw(discordPending.shift());
+      try {
+        buf = Buffer.concat([buf, chunk]);
+        while (buf.length >= 4) {
+          const len = buf.readUInt32LE(0);
+          if (len <= 0 || len > 10485760) { buf = Buffer.alloc(0); break; }
+          if (buf.length < 4 + len) break;
+          let payload = null;
+          try { payload = JSON.parse(buf.slice(4, 4 + len).toString("utf8")); } catch { buf = buf.slice(4 + len); continue; }
+          buf = buf.slice(4 + len);
+          if (payload && payload.evt === "READY") {
+            discordReady = true;
+            while (discordPending.length) discordSendRaw(discordPending.shift());
+          }
         }
-      }
+      } catch { /* ignore parse errors */ }
     });
     s.on("error", () => { try { s.destroy(); } catch { /* ignore */ } });
     s.on("close", () => {
