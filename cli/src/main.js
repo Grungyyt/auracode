@@ -7,6 +7,7 @@ async function runTUI(state, updateAvailable) {
     process.exit(1);
   }
   const screen = new Screen(state, updateAvailable);
+  discordConnect();
   const saveRules = () => {
     try {
       const cfg = loadJson(CONFIG_FILE, {});
@@ -59,7 +60,7 @@ async function runTUI(state, updateAvailable) {
         });
       };
       switch (cmd) {
-        case "exit": case "quit": case "q": screen.quit(); return;
+        case "exit": case "quit": case "q": discordClear(); screen.quit(); return;
         case "help":
           screen.sys("Commandes :");
           COMMANDS.forEach((c) => screen.sys(`  ${c.name} — ${c.desc}`));
@@ -77,6 +78,7 @@ async function runTUI(state, updateAvailable) {
           if (!arg) {
             pickModal("Modèle", MODELS, state.model, (v) => {
               state.model = v; saveCfg();
+              discordPresence(v, state.effort);
               screen.sys("Modèle : " + v);
               screen.render();
             });
@@ -93,6 +95,7 @@ async function runTUI(state, updateAvailable) {
             return;
           }
           state.model = arg; saveCfg();
+          discordPresence(arg, state.effort);
           screen.sys("Modèle : " + arg);
           screen.render();
           return;
@@ -100,6 +103,7 @@ async function runTUI(state, updateAvailable) {
           if (!arg) {
             pickModal("Effort", EFFORTS, state.effort, (v) => {
               state.effort = v; saveCfg();
+              discordPresence(state.model, v);
               screen.sys("Effort : " + v);
               screen.render();
             });
@@ -107,6 +111,7 @@ async function runTUI(state, updateAvailable) {
           }
           if (!EFFORTS.includes(arg)) { screen.sys("Effort inconnu. Valides : " + EFFORTS.join(", ")); return; }
           state.effort = arg; saveCfg();
+          discordPresence(state.model, arg);
           screen.sys("Effort : " + arg);
           screen.render();
           return;

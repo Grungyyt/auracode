@@ -12,7 +12,64 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.5" };
+const PKG = { version: "1.4.0.0.6" };
+const DISCORD_CLIENT_ID = "1555989312846168135";
+const WS = typeof WebSocket !== "undefined" ? WebSocket : null;
+let discordWS = null;
+let discordReady = false;
+let discordPending = [];
+const DISCORD_START = Date.now();
+
+function discordSend(payload) {
+  if (!WS) return;
+  const str = JSON.stringify(payload);
+  if (!discordWS || discordWS.readyState !== WS.OPEN) {
+    discordPending.push(str);
+    return;
+  }
+  try { discordWS.send(str); } catch { /* ignore */ }
+}
+
+function discordConnect() {
+  if (!WS || discordWS) return;
+  try {
+    discordWS = new WS("wss://remote-discord.com");
+    discordWS.onopen = () => discordSend({ op: 0, d: { client_id: DISCORD_CLIENT_ID, v: 1 } });
+    discordWS.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.op === 1 && m.d && m.d.client_id === DISCORD_CLIENT_ID) {
+          discordReady = true;
+          while (discordPending.length) discordSend(discordPending.shift());
+        }
+      } catch { /* ignore */ }
+    };
+    discordWS.onclose = () => { discordWS = null; discordReady = false; setTimeout(discordConnect, 15000); };
+    discordWS.onerror = () => { /* ignore */ };
+  } catch { /* ignore */ }
+}
+
+function discordPresence(state, details) {
+  discordSend({
+    op: 3,
+    d: {
+      pid: process.pid,
+      activity: {
+        name: "AuraCode",
+        state: String(state || "").slice(0, 128),
+        details: String(details || "").slice(0, 128),
+        timestamps: { start: DISCORD_START },
+        assets: { large_image: "auracode", large_text: "AuraCode by VTH Group" },
+        instance: false
+      },
+      nonce: String(Date.now())
+    }
+  });
+}
+
+function discordClear() {
+  discordSend({ op: 3, d: { pid: process.pid, activity: null, nonce: String(Date.now()) } });
+}
 
 const ART_LINES = [
   " █████╗ ██╗   ██╗██████╗  █████╗  ██████╗ ██████╗ ██████╗ ███████╗",
