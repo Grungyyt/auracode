@@ -15,7 +15,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.19" };
+const PKG = { version: "1.4.0.0.20" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -1227,6 +1227,124 @@ const csvToJson = (csv) => {
     return JSON.stringify(out, null, 2);
   } catch { return "CSV invalide"; }
 };
+
+// ---------- Utilitaires finaux (lot 6/5) ----------
+const tempConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  let c;
+  if (from === "C") c = v;
+  else if (from === "F") c = (v - 32) * 5 / 9;
+  else if (from === "K") c = v - 273.15;
+  else return "Unité invalide";
+  let r;
+  if (to === "C") r = c;
+  else if (to === "F") r = c * 9 / 5 + 32;
+  else if (to === "K") r = c + 273.15;
+  else return "Unité invalide";
+  return v + " " + from + " = " + r.toFixed(2) + " " + to;
+};
+const lengthConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { m: 1, km: 1000, mi: 1609.34, ft: 0.3048, cm: 0.01, mm: 0.001 }[from] || 1;
+  const t = { m: 1, km: 1000, mi: 1609.34, ft: 0.3048, cm: 0.01, mm: 0.001 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const weightConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { kg: 1, g: 0.001, lb: 0.453592, oz: 0.0283495 }[from] || 1;
+  const t = { kg: 1, g: 0.001, lb: 0.453592, oz: 0.0283495 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const volumeConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { L: 1, ml: 0.001, gal: 3.78541, qt: 0.946353, pt: 0.473176 }[from] || 1;
+  const t = { L: 1, ml: 0.001, gal: 3.78541, qt: 0.946353, pt: 0.473176 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const speedConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { "km/h": 1, "m/s": 3.6, mph: 1.60934, knot: 1.852 }[from] || 1;
+  const t = { "km/h": 1, "m/s": 3.6, mph: 1.60934, knot: 1.852 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const energyConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { J: 1, kJ: 1000, cal: 4.184, kcal: 4184 }[from] || 1;
+  const t = { J: 1, kJ: 1000, cal: 4.184, kcal: 4184 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const pressureConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { Pa: 1, bar: 100000, psi: 6894.76, atm: 101325 }[from] || 1;
+  const t = { Pa: 1, bar: 100000, psi: 6894.76, atm: 101325 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const angleConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const r = from === "rad" ? v : v * Math.PI / 180;
+  const out = to === "rad" ? r : r * 180 / Math.PI;
+  return v + " " + from + " = " + out.toFixed(4) + " " + to;
+};
+const dataConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 }[from] || 1;
+  const t = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const baseConvert = (num, from, to) => {
+  const f = { dec: 10, bin: 2, oct: 8, hex: 16 }[from] || 10;
+  const t = { dec: 10, bin: 2, oct: 8, hex: 16 }[to] || 10;
+  const n = parseInt(num, f);
+  if (isNaN(n)) return "Nombre invalide";
+  return n.toString(t).toUpperCase();
+};
+const uuidGen = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+  const r = Math.random() * 16;
+  const v = c === "x" ? r : (r & 0x3 | 0x8);
+  return v.toString(16);
+});
+const jsonFormat = (t) => {
+  try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return "JSON invalide"; }
+};
+const jsonMinify = (t) => {
+  try { return JSON.stringify(JSON.parse(t)); } catch { return "JSON invalide"; }
+};
+const jsonValidate = (t) => {
+  try { JSON.parse(t); return "JSON valide"; } catch { return "JSON invalide"; }
+};
+const xmlToJson = (xml) => {
+  try {
+    const tags = xml.match(/<([a-z]+)[^>]*>([^<]*)<\/\1>/gi) || [];
+    const out = {};
+    tags.forEach((tag) => {
+      const m = tag.match(/<([a-z]+)[^>]*>([^<]*)<\/\1>/);
+      if (m) out[m[1]] = m[2];
+    });
+    return JSON.stringify(out, null, 2) || "Aucune balise trouvée";
+  } catch { return "XML invalide"; }
+};
+const htmlStrip = (t) => String(t || "").replace(/<[^>]*>/g, "").trim();
+const textStats = (t) => {
+  const s = String(t || "");
+  const words = s.trim() ? s.trim().split(/\s+/).length : 0;
+  const lines = s.split("\n").length;
+  const chars = s.length;
+  const charsNoSpace = s.replace(/\s/g, "").length;
+  return "Caractères : " + chars + " (sans espaces : " + charsNoSpace + ") | Mots : " + words + " | Lignes : " + lines;
+};
+const isPalindrome = (t) => {
+  const clean = String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return clean === clean.split("").reverse().join("") ? "Palindrome : OUI" : "Palindrome : NON";
+};
+const isAnagram = (a, b) => {
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z]/g, "").split("").sort().join("");
+  return norm(a) === norm(b) ? "Anagramme : OUI" : "Anagramme : NON";
+};
+const paletteGen = () => {
+  const h = Math.floor(Math.random() * 360);
+  return ["#" + Math.floor(Math.random()*16777215).toString(16).padStart(6,"0"), "#" + Math.floor(Math.random()*16777215).toString(16).padStart(6,"0"), "#" + Math.floor(Math.random()*16777215).toString(16).padStart(6,"0")];
+};
+
 
 // ---------- Fun / Utilitaires (lot 5/5) ----------
 const diceRoll = (sides = 6) => Math.floor(Math.random() * Math.max(2, sides)) + 1;

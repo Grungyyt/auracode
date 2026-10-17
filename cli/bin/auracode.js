@@ -22,7 +22,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.19" };
+const PKG = { version: "1.4.0.0.20" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -1234,6 +1234,124 @@ const csvToJson = (csv) => {
     return JSON.stringify(out, null, 2);
   } catch { return "CSV invalide"; }
 };
+
+// ---------- Utilitaires finaux (lot 6/5) ----------
+const tempConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  let c;
+  if (from === "C") c = v;
+  else if (from === "F") c = (v - 32) * 5 / 9;
+  else if (from === "K") c = v - 273.15;
+  else return "Unité invalide";
+  let r;
+  if (to === "C") r = c;
+  else if (to === "F") r = c * 9 / 5 + 32;
+  else if (to === "K") r = c + 273.15;
+  else return "Unité invalide";
+  return v + " " + from + " = " + r.toFixed(2) + " " + to;
+};
+const lengthConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { m: 1, km: 1000, mi: 1609.34, ft: 0.3048, cm: 0.01, mm: 0.001 }[from] || 1;
+  const t = { m: 1, km: 1000, mi: 1609.34, ft: 0.3048, cm: 0.01, mm: 0.001 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const weightConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { kg: 1, g: 0.001, lb: 0.453592, oz: 0.0283495 }[from] || 1;
+  const t = { kg: 1, g: 0.001, lb: 0.453592, oz: 0.0283495 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const volumeConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { L: 1, ml: 0.001, gal: 3.78541, qt: 0.946353, pt: 0.473176 }[from] || 1;
+  const t = { L: 1, ml: 0.001, gal: 3.78541, qt: 0.946353, pt: 0.473176 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const speedConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { "km/h": 1, "m/s": 3.6, mph: 1.60934, knot: 1.852 }[from] || 1;
+  const t = { "km/h": 1, "m/s": 3.6, mph: 1.60934, knot: 1.852 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const energyConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { J: 1, kJ: 1000, cal: 4.184, kcal: 4184 }[from] || 1;
+  const t = { J: 1, kJ: 1000, cal: 4.184, kcal: 4184 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const pressureConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { Pa: 1, bar: 100000, psi: 6894.76, atm: 101325 }[from] || 1;
+  const t = { Pa: 1, bar: 100000, psi: 6894.76, atm: 101325 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const angleConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const r = from === "rad" ? v : v * Math.PI / 180;
+  const out = to === "rad" ? r : r * 180 / Math.PI;
+  return v + " " + from + " = " + out.toFixed(4) + " " + to;
+};
+const dataConvert = (value, from, to) => {
+  const v = parseFloat(value);
+  const m = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 }[from] || 1;
+  const t = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 }[to] || 1;
+  return v + " " + from + " = " + ((v * m) / t).toFixed(4) + " " + to;
+};
+const baseConvert = (num, from, to) => {
+  const f = { dec: 10, bin: 2, oct: 8, hex: 16 }[from] || 10;
+  const t = { dec: 10, bin: 2, oct: 8, hex: 16 }[to] || 10;
+  const n = parseInt(num, f);
+  if (isNaN(n)) return "Nombre invalide";
+  return n.toString(t).toUpperCase();
+};
+const uuidGen = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+  const r = Math.random() * 16;
+  const v = c === "x" ? r : (r & 0x3 | 0x8);
+  return v.toString(16);
+});
+const jsonFormat = (t) => {
+  try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return "JSON invalide"; }
+};
+const jsonMinify = (t) => {
+  try { return JSON.stringify(JSON.parse(t)); } catch { return "JSON invalide"; }
+};
+const jsonValidate = (t) => {
+  try { JSON.parse(t); return "JSON valide"; } catch { return "JSON invalide"; }
+};
+const xmlToJson = (xml) => {
+  try {
+    const tags = xml.match(/<([a-z]+)[^>]*>([^<]*)<\/\1>/gi) || [];
+    const out = {};
+    tags.forEach((tag) => {
+      const m = tag.match(/<([a-z]+)[^>]*>([^<]*)<\/\1>/);
+      if (m) out[m[1]] = m[2];
+    });
+    return JSON.stringify(out, null, 2) || "Aucune balise trouvée";
+  } catch { return "XML invalide"; }
+};
+const htmlStrip = (t) => String(t || "").replace(/<[^>]*>/g, "").trim();
+const textStats = (t) => {
+  const s = String(t || "");
+  const words = s.trim() ? s.trim().split(/\s+/).length : 0;
+  const lines = s.split("\n").length;
+  const chars = s.length;
+  const charsNoSpace = s.replace(/\s/g, "").length;
+  return "Caractères : " + chars + " (sans espaces : " + charsNoSpace + ") | Mots : " + words + " | Lignes : " + lines;
+};
+const isPalindrome = (t) => {
+  const clean = String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return clean === clean.split("").reverse().join("") ? "Palindrome : OUI" : "Palindrome : NON";
+};
+const isAnagram = (a, b) => {
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z]/g, "").split("").sort().join("");
+  return norm(a) === norm(b) ? "Anagramme : OUI" : "Anagramme : NON";
+};
+const paletteGen = () => {
+  const h = Math.floor(Math.random() * 360);
+  return ["#" + Math.floor(Math.random()*16777215).toString(16).padStart(6,"0"), "#" + Math.floor(Math.random()*16777215).toString(16).padStart(6,"0"), "#" + Math.floor(Math.random()*16777215).toString(16).padStart(6,"0")];
+};
+
 
 // ---------- Fun / Utilitaires (lot 5/5) ----------
 const diceRoll = (sides = 6) => Math.floor(Math.random() * Math.max(2, sides)) + 1;
@@ -5155,8 +5273,116 @@ async function runTUI(state, updateAvailable) {
           screen.render();
           return;
         }
-        default:
-          screen.sys("Commande inconnue, /help pour la liste.");
+        case "temp-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /temp-convert <valeur> <de> <à> (C, F, K)"); return; }
+          screen.sys(tempConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "length-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /length-convert <valeur> <de> <à> (m, km, mi, ft, cm, mm)"); return; }
+          screen.sys(lengthConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "weight-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /weight-convert <valeur> <de> <à> (kg, g, lb, oz)"); return; }
+          screen.sys(weightConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "volume-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /volume-convert <valeur> <de> <à> (L, ml, gal, qt, pt)"); return; }
+          screen.sys(volumeConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "speed-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /speed-convert <valeur> <de> <à> (km/h, m/s, mph, knot)"); return; }
+          screen.sys(speedConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "energy-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /energy-convert <valeur> <de> <à> (J, kJ, cal, kcal)"); return; }
+          screen.sys(energyConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "pressure-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /pressure-convert <valeur> <de> <à> (Pa, bar, psi, atm)"); return; }
+          screen.sys(pressureConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "angle-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /angle-convert <valeur> <de> <à> (deg, rad)"); return; }
+          screen.sys(angleConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "data-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /data-convert <valeur> <de> <à> (B, KB, MB, GB, TB)"); return; }
+          screen.sys(dataConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "base-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /base-convert <nombre> <de> <à> (dec, bin, oct, hex)"); return; }
+          screen.sys(baseConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "uuid-gen": {
+          screen.sys(uuidGen());
+          return;
+        }
+        case "json-format": {
+          if (!arg) { screen.sys("Usage : /json-format <texte JSON>"); return; }
+          screen.sys(jsonFormat(arg));
+          return;
+        }
+        case "json-minify": {
+          if (!arg) { screen.sys("Usage : /json-minify <texte JSON>"); return; }
+          screen.sys(jsonMinify(arg));
+          return;
+        }
+        case "json-validate": {
+          if (!arg) { screen.sys("Usage : /json-validate <texte JSON>"); return; }
+          screen.sys(jsonValidate(arg));
+          return;
+        }
+        case "xml-to-json": {
+          if (!arg) { screen.sys("Usage : /xml-to-json <texte XML>"); return; }
+          screen.sys(xmlToJson(arg));
+          return;
+        }
+        case "html-strip": {
+          if (!arg) { screen.sys("Usage : /html-strip <texte HTML>"); return; }
+          screen.sys(htmlStrip(arg));
+          return;
+        }
+        case "text-stats": {
+          if (!arg) { screen.sys("Usage : /text-stats <texte>"); return; }
+          screen.sys(textStats(arg));
+          return;
+        }
+        case "palindrome": {
+          if (!arg) { screen.sys("Usage : /palindrome <texte>"); return; }
+          screen.sys(isPalindrome(arg));
+          return;
+        }
+        case "anagram": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /anagram <mot1> <mot2>"); return; }
+          screen.sys(isAnagram(parts[0], parts.slice(1).join(" ")));
+          return;
+        }
+        case "palette": {
+          screen.sys(paletteGen().join("  "));
+          return;
+        }
+        case "default":
           return;
       }
     }

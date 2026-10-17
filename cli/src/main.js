@@ -1938,8 +1938,116 @@ async function runTUI(state, updateAvailable) {
           screen.render();
           return;
         }
-        default:
-          screen.sys("Commande inconnue, /help pour la liste.");
+        case "temp-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /temp-convert <valeur> <de> <à> (C, F, K)"); return; }
+          screen.sys(tempConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "length-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /length-convert <valeur> <de> <à> (m, km, mi, ft, cm, mm)"); return; }
+          screen.sys(lengthConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "weight-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /weight-convert <valeur> <de> <à> (kg, g, lb, oz)"); return; }
+          screen.sys(weightConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "volume-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /volume-convert <valeur> <de> <à> (L, ml, gal, qt, pt)"); return; }
+          screen.sys(volumeConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "speed-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /speed-convert <valeur> <de> <à> (km/h, m/s, mph, knot)"); return; }
+          screen.sys(speedConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "energy-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /energy-convert <valeur> <de> <à> (J, kJ, cal, kcal)"); return; }
+          screen.sys(energyConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "pressure-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /pressure-convert <valeur> <de> <à> (Pa, bar, psi, atm)"); return; }
+          screen.sys(pressureConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "angle-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /angle-convert <valeur> <de> <à> (deg, rad)"); return; }
+          screen.sys(angleConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "data-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /data-convert <valeur> <de> <à> (B, KB, MB, GB, TB)"); return; }
+          screen.sys(dataConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "base-convert": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /base-convert <nombre> <de> <à> (dec, bin, oct, hex)"); return; }
+          screen.sys(baseConvert(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "uuid-gen": {
+          screen.sys(uuidGen());
+          return;
+        }
+        case "json-format": {
+          if (!arg) { screen.sys("Usage : /json-format <texte JSON>"); return; }
+          screen.sys(jsonFormat(arg));
+          return;
+        }
+        case "json-minify": {
+          if (!arg) { screen.sys("Usage : /json-minify <texte JSON>"); return; }
+          screen.sys(jsonMinify(arg));
+          return;
+        }
+        case "json-validate": {
+          if (!arg) { screen.sys("Usage : /json-validate <texte JSON>"); return; }
+          screen.sys(jsonValidate(arg));
+          return;
+        }
+        case "xml-to-json": {
+          if (!arg) { screen.sys("Usage : /xml-to-json <texte XML>"); return; }
+          screen.sys(xmlToJson(arg));
+          return;
+        }
+        case "html-strip": {
+          if (!arg) { screen.sys("Usage : /html-strip <texte HTML>"); return; }
+          screen.sys(htmlStrip(arg));
+          return;
+        }
+        case "text-stats": {
+          if (!arg) { screen.sys("Usage : /text-stats <texte>"); return; }
+          screen.sys(textStats(arg));
+          return;
+        }
+        case "palindrome": {
+          if (!arg) { screen.sys("Usage : /palindrome <texte>"); return; }
+          screen.sys(isPalindrome(arg));
+          return;
+        }
+        case "anagram": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /anagram <mot1> <mot2>"); return; }
+          screen.sys(isAnagram(parts[0], parts.slice(1).join(" ")));
+          return;
+        }
+        case "palette": {
+          screen.sys(paletteGen().join("  "));
+          return;
+        }
+        case "default":
           return;
       }
     }
