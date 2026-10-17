@@ -1427,6 +1427,136 @@ async function runTUI(state, updateAvailable) {
           screen.sys(randomFortune());
           return;
         }
+        case "fortune": {
+          screen.sys(randomFortune());
+          return;
+        }
+        case "banner": {
+          if (!arg) { screen.sys("Usage : /banner <texte>"); return; }
+          screen.sys(bannerFiglet(arg));
+          return;
+        }
+        case "figlet": {
+          if (!arg) { screen.sys("Usage : /figlet <texte>"); return; }
+          screen.sys(asciiFiglet(arg));
+          return;
+        }
+        case "cowsay": {
+          if (!arg) { screen.sys("Usage : /cowsay <texte>"); return; }
+          const w = Math.max(arg.length + 2, 10);
+          const top = " " + "_".repeat(w) + "\n";
+          const mid = " < " + padRight(arg, w - 2) + " >\n";
+          const bot = " " + "-".repeat(w) + "\n";
+          const cow = "        \\   ^__^\n         \\  (oo)\\_______\n            (__)\\       )\\/\\\\\n                ||----w |\n                ||     ||";
+          screen.sys(top + mid + bot + cow);
+          return;
+        }
+        case "box": {
+          if (!arg) { screen.sys("Usage : /box <texte>"); return; }
+          screen.sys(boxText(arg.split("\n")));
+          return;
+        }
+        case "tableau": {
+          if (!arg) { screen.sys("Usage : /tableau <a,b;c,d>"); return; }
+          const rows = arg.split(";").map((r) => r.split(","));
+          const w = Math.max(...rows.map((r) => Math.max(...r.map((c) => vlen(c)))));
+          const sep = "+" + rows[0].map(() => "-".repeat(w + 2)).join("+") + "+";
+          let out = sep + "\n";
+          rows.forEach((r) => {
+            out += "| " + r.map((c) => padRight(c, w)).join(" | ") + " |\n" + sep + "\n";
+          });
+          screen.sys(out);
+          return;
+        }
+        case "progress": {
+          const pct = parseInt(arg, 10) || 0;
+          const w = 20;
+          const filled = Math.round((pct / 100) * w);
+          const bar = "#".repeat(filled) + "-".repeat(w - filled);
+          screen.sys("[" + bar + "] " + pct + "%");
+          return;
+        }
+        case "calendar": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const now = new Date();
+          const y = parts[0] ? parseInt(parts[0], 10) : now.getFullYear();
+          const m = parts[1] ? parseInt(parts[1], 10) : now.getMonth() + 1;
+          screen.sys(calendar(y, m));
+          return;
+        }
+        case "clock": {
+          screen.sys(clockAscii());
+          return;
+        }
+        case "ruler": {
+          screen.sys(ruler(parseInt(arg, 10) || 40));
+          return;
+        }
+        case "frame": {
+          if (!arg) { screen.sys("Usage : /frame <texte>"); return; }
+          screen.sys(frameText(arg));
+          return;
+        }
+        case "center": {
+          if (!arg) { screen.sys("Usage : /center <texte>"); return; }
+          screen.sys(padCenter(arg, 40));
+          return;
+        }
+        case "justify": {
+          if (!arg) { screen.sys("Usage : /justify <texte>"); return; }
+          screen.sys(arg.split(" ").join("   "));
+          return;
+        }
+        case "wrap": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const w = parseInt(parts.pop(), 10) || 40;
+          const text = parts.join(" ");
+          let line = "", out = "";
+          for (const word of text.split(" ")) {
+            if ((line + word).length > w) { out += line + "\n"; line = word; }
+            else line += (line ? " " : "") + word;
+          }
+          out += line;
+          screen.sys(out);
+          return;
+        }
+        case "repeat": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const n = parseInt(parts.pop(), 10) || 1;
+          const text = parts.join(" ");
+          screen.sys(text.repeat(n));
+          return;
+        }
+        case "mirror": {
+          if (!arg) { screen.sys("Usage : /mirror <texte>"); return; }
+          screen.sys(mirror(arg));
+          return;
+        }
+        case "flip": {
+          if (!arg) { screen.sys("Usage : /flip <texte>"); return; }
+          screen.sys(flip(arg));
+          return;
+        }
+        case "strikethrough": {
+          if (!arg) { screen.sys("Usage : /strikethrough <texte>"); return; }
+          screen.sys(strikethrough(arg));
+          return;
+        }
+        case "underline": {
+          if (!arg) { screen.sys("Usage : /underline <texte>"); return; }
+          screen.sys(underline(arg));
+          return;
+        }
+        case "boxed": {
+          if (!arg) { screen.sys("Usage : /boxed <texte>"); return; }
+          screen.sys(frameText(arg, "═"));
+          return;
+        }
+        case "sep": {
+          const ch = arg || "─";
+          screen.sys(ch.repeat(40));
+          return;
+        }
         case "conv": {
           let list = [];
           try {

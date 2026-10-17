@@ -22,7 +22,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.15" };
+const PKG = { version: "1.4.0.0.16" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -237,6 +237,83 @@ const fortunes = [
   "Une rencontre marquante approche."
 ];
 const randomFortune = () => fortunes[Math.floor(Math.random() * fortunes.length)];
+
+// ---------- Mise en avant / présentation ----------
+const boxChars = { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" };
+const padRight = (s, len) => s + " ".repeat(Math.max(0, len - s.length));
+const padLeft = (s, len) => " ".repeat(Math.max(0, len - s.length)) + s;
+const padCenter = (s, len) => {
+  const p = Math.max(0, len - s.length);
+  return " ".repeat(Math.floor(p / 2)) + s + " ".repeat(Math.ceil(p / 2));
+};
+const boxText = (lines) => {
+  const w = Math.max(...lines.map((l) => l.length));
+  const top = boxChars.tl + boxChars.h.repeat(w + 2) + boxChars.tr;
+  const bot = boxChars.bl + boxChars.h.repeat(w + 2) + boxChars.br;
+  const rows = lines.map((l) => boxChars.v + " " + padRight(l, w) + " " + boxChars.v);
+  return [top, ...rows, bot].join("\n");
+};
+const frameText = (text, ch = "─") => {
+  const w = Math.max(...text.split("\n").map((l) => l.length), 10);
+  const top = ch.repeat(w + 2);
+  const mid = text.split("\n").map((l) => ch + " " + padRight(l, w) + " " + ch).join("\n");
+  return [top, mid, top].join("\n");
+};
+const vlen = (s) => stripAnsi(s).length;
+const bannerFiglet = (text) => {
+  const map = {
+    "A":" ██╗   ██╗ ██████╗ ██████╗ \n ██║   ██║██╔═══██╗██╔══██╗\n  ██║ ██╔╝██║   ██║██████╔╝\n   █████╔╝██║   ██║██╔═══╝ \n    ██╔═╝ ██║   ██║██║     \n   ██║   ╚██████╔╝██████╗ \n   ╚═╝    ╚═════╝ ╚═════╝ ",
+    "B":" ██████╗ ██████╗ \n ██╔══██╗██╔══██╗\n ██████╔╝██████╔╝\n ██╔══██╗██╔═══╝ \n ██║  ██║██████╔╝\n ╚═╝   ╚═╝╚═════╝ ",
+    "C":"  ██████╗\n ██╔════╝\n ██║     \n ██║     \n ╚██████╗\n  ╚═════╝ ",
+    "D":" ██████╗ \n ██╔══██╗\n ██████╔╝\n ██╔══██╗\n ██████╔╝\n ╚═════╝ ",
+    "E":" ██████╗\n ██╔══██╗\n ██████╔╝\n ██╔═══╝ \n ██╔══██╗\n ██████╔╝",
+    "F":" ██████╗\n ██╔══██╗\n ██████╔╝\n ██╔═══╝ \n ██║     \n ██║     ",
+    "G":"  ██████╗\n ██╔═══██╗\n ██║     \n ██║   ██╗\n ╚██████╔╝\n  ╚═════╝ ",
+    "H":" ██╗   ██╗\n ██║   ██║\n ███████║\n ██╔══██║\n ██║  ██║\n ╚═╝   ╚═╝",
+    "I":"  ██████╗\n      ██║\n     ██║\n    ██║\n ██████╔╝\n ╚══════╝ ",
+    "J":"        ██║\n        ██║\n ██╗   ██║\n ██║   ██║\n ╚██████╔╝\n  ╚═════╝ ",
+    "K":" ██╗   ██╗\n ██║   ██║\n ███████║\n ██╔═██╗ \n ██║  ██╗\n ██║   ██╗",
+    "L":" ██╗    \n ██║    \n ██║    \n ██║    \n ███████╗\n ╚══════╝",
+    "M":" ██╗   ██╗ ██╗   ██╗\n ████████║ ████████║\n ██╔════██║ ██╔════██║\n ██║     ██║ ██║     ██║\n ██║     ██║ ███████║\n ╚═╝     ╚═╝ ╚══════╝",
+    "N":" ██╗   ██╗\n ████ ██║\n ██ ████║\n ██╗ ██║\n ██║  ██║\n ╚═╝   ╚═╝",
+    "O":"  ██████╗\n ██╔══██╗\n ███████║\n ██╔══██║\n ██████╔╝\n ╚═════╝ ",
+    "P":" ██████╗ \n ██╔══██╗\n ██████╔╝\n ██╔═══╝ \n ██║     \n ██║     ",
+    "Q":"  ██████╗\n ██╔══██╗\n ███████║\n ██╔══██║\n ██████╔╝\n ╚══════╝ ",
+    "R":" ██████╗ \n ██╔══██╗\n ██████╔╝\n ██╔═██╗ \n ██║  ██╗\n ██║   ██╗",
+    "S":" ███████╗\n ██╔════╝\n  ██████╗\n ╚════██║\n ███████║\n ╚══════╝",
+    "T":" ████████╗\n     ██╔╝\n    ██╔╝\n   ██╔╝\n   ██║\n   ╚═╝",
+    "U":" ██╗   ██╗\n ██║   ██║\n ██║   ██║\n ██║   ██║\n ╚██████╔╝\n  ╚═════╝ ",
+    "V":" ██╗   ██╗\n ██║   ██║\n ██║   ██║\n ╚██╗ ██╔╝\n  ╚████╔╝\n   ╚══╝ ",
+    "W":" ██╗   ██╗ ██╗   ██╗\n ██║   ██║ ██║   ██║\n ██║   ██║ ██║   ██║\n ██║   ██║ ██║   ██║\n ╚██████╔╝╚██████╔╝\n  ╚═════╝ ╚═════╝ ",
+    "X":" ██╗ ██╗\n  ████╔╝\n   ██╔╝\n   ██╔╝\n  ████╗\n ██╗ ██╗",
+    "Y":" ██╗   ██╗\n  █████╔╝\n   ████╔╝\n   ██╔╝\n   ██║\n   ██║",
+    "Z":" ██████╗\n     ╚██╔╝\n    ██╔╝\n   ██╔╝\n  ██████╗"
+  };
+  return text.toUpperCase().split("").map((c) => map[c] || " ? ").join("   ");
+};
+const calendar = (year, month) => {
+  const d = new Date(year, month - 1, 1);
+  const days = new Date(year, month, 0).getDate();
+  const start = d.getDay();
+  const rows = ["Lu Ma Me Je Ve Sa Di"];
+  let line = "   ".repeat(start);
+  for (let i = 1; i <= days; i++) {
+    line += (i < 10 ? " " : "") + i + " ";
+    if ((start + i) % 7 === 0 || i === days) { rows.push(line); line = ""; }
+  }
+  return rows.join("\n");
+};
+const clockAscii = () => {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes();
+  return ["┌─────────┐","│ " + padLeft(h,2) + ":" + padLeft(m,2) + " │","└─────────┘","  " + now.toLocaleTimeString()].join("\n");
+};
+const ruler = (len = 40) => "1234567890" + " ".repeat(len - 10) + "\n" + "----------|" + "-".repeat(len - 10);
+const strikethrough = (t) => t.split("").map((c) => c + "\u0336").join("");
+const underline = (t) => t.split("").map((c) => c + "\u0332").join("");
+const mirror = (t) => t.split("").reverse().join("");
+const flip = (t) => t.split("\n").map((l) => l.split("").reverse().join("")).join("\n");
+
 
 const asciiFiglet = (text) => {
   const map = {
@@ -4245,6 +4322,136 @@ async function runTUI(state, updateAvailable) {
         }
         case "fortune": {
           screen.sys(randomFortune());
+          return;
+        }
+        case "fortune": {
+          screen.sys(randomFortune());
+          return;
+        }
+        case "banner": {
+          if (!arg) { screen.sys("Usage : /banner <texte>"); return; }
+          screen.sys(bannerFiglet(arg));
+          return;
+        }
+        case "figlet": {
+          if (!arg) { screen.sys("Usage : /figlet <texte>"); return; }
+          screen.sys(asciiFiglet(arg));
+          return;
+        }
+        case "cowsay": {
+          if (!arg) { screen.sys("Usage : /cowsay <texte>"); return; }
+          const w = Math.max(arg.length + 2, 10);
+          const top = " " + "_".repeat(w) + "\n";
+          const mid = " < " + padRight(arg, w - 2) + " >\n";
+          const bot = " " + "-".repeat(w) + "\n";
+          const cow = "        \\   ^__^\n         \\  (oo)\\_______\n            (__)\\       )\\/\\\\\n                ||----w |\n                ||     ||";
+          screen.sys(top + mid + bot + cow);
+          return;
+        }
+        case "box": {
+          if (!arg) { screen.sys("Usage : /box <texte>"); return; }
+          screen.sys(boxText(arg.split("\n")));
+          return;
+        }
+        case "tableau": {
+          if (!arg) { screen.sys("Usage : /tableau <a,b;c,d>"); return; }
+          const rows = arg.split(";").map((r) => r.split(","));
+          const w = Math.max(...rows.map((r) => Math.max(...r.map((c) => vlen(c)))));
+          const sep = "+" + rows[0].map(() => "-".repeat(w + 2)).join("+") + "+";
+          let out = sep + "\n";
+          rows.forEach((r) => {
+            out += "| " + r.map((c) => padRight(c, w)).join(" | ") + " |\n" + sep + "\n";
+          });
+          screen.sys(out);
+          return;
+        }
+        case "progress": {
+          const pct = parseInt(arg, 10) || 0;
+          const w = 20;
+          const filled = Math.round((pct / 100) * w);
+          const bar = "#".repeat(filled) + "-".repeat(w - filled);
+          screen.sys("[" + bar + "] " + pct + "%");
+          return;
+        }
+        case "calendar": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const now = new Date();
+          const y = parts[0] ? parseInt(parts[0], 10) : now.getFullYear();
+          const m = parts[1] ? parseInt(parts[1], 10) : now.getMonth() + 1;
+          screen.sys(calendar(y, m));
+          return;
+        }
+        case "clock": {
+          screen.sys(clockAscii());
+          return;
+        }
+        case "ruler": {
+          screen.sys(ruler(parseInt(arg, 10) || 40));
+          return;
+        }
+        case "frame": {
+          if (!arg) { screen.sys("Usage : /frame <texte>"); return; }
+          screen.sys(frameText(arg));
+          return;
+        }
+        case "center": {
+          if (!arg) { screen.sys("Usage : /center <texte>"); return; }
+          screen.sys(padCenter(arg, 40));
+          return;
+        }
+        case "justify": {
+          if (!arg) { screen.sys("Usage : /justify <texte>"); return; }
+          screen.sys(arg.split(" ").join("   "));
+          return;
+        }
+        case "wrap": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const w = parseInt(parts.pop(), 10) || 40;
+          const text = parts.join(" ");
+          let line = "", out = "";
+          for (const word of text.split(" ")) {
+            if ((line + word).length > w) { out += line + "\n"; line = word; }
+            else line += (line ? " " : "") + word;
+          }
+          out += line;
+          screen.sys(out);
+          return;
+        }
+        case "repeat": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          const n = parseInt(parts.pop(), 10) || 1;
+          const text = parts.join(" ");
+          screen.sys(text.repeat(n));
+          return;
+        }
+        case "mirror": {
+          if (!arg) { screen.sys("Usage : /mirror <texte>"); return; }
+          screen.sys(mirror(arg));
+          return;
+        }
+        case "flip": {
+          if (!arg) { screen.sys("Usage : /flip <texte>"); return; }
+          screen.sys(flip(arg));
+          return;
+        }
+        case "strikethrough": {
+          if (!arg) { screen.sys("Usage : /strikethrough <texte>"); return; }
+          screen.sys(strikethrough(arg));
+          return;
+        }
+        case "underline": {
+          if (!arg) { screen.sys("Usage : /underline <texte>"); return; }
+          screen.sys(underline(arg));
+          return;
+        }
+        case "boxed": {
+          if (!arg) { screen.sys("Usage : /boxed <texte>"); return; }
+          screen.sys(frameText(arg, "═"));
+          return;
+        }
+        case "sep": {
+          const ch = arg || "─";
+          screen.sys(ch.repeat(40));
           return;
         }
         case "conv": {

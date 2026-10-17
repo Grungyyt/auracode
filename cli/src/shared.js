@@ -15,7 +15,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.15" };
+const PKG = { version: "1.4.0.0.16" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -230,6 +230,83 @@ const fortunes = [
   "Une rencontre marquante approche."
 ];
 const randomFortune = () => fortunes[Math.floor(Math.random() * fortunes.length)];
+
+// ---------- Mise en avant / présentation ----------
+const boxChars = { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" };
+const padRight = (s, len) => s + " ".repeat(Math.max(0, len - s.length));
+const padLeft = (s, len) => " ".repeat(Math.max(0, len - s.length)) + s;
+const padCenter = (s, len) => {
+  const p = Math.max(0, len - s.length);
+  return " ".repeat(Math.floor(p / 2)) + s + " ".repeat(Math.ceil(p / 2));
+};
+const boxText = (lines) => {
+  const w = Math.max(...lines.map((l) => l.length));
+  const top = boxChars.tl + boxChars.h.repeat(w + 2) + boxChars.tr;
+  const bot = boxChars.bl + boxChars.h.repeat(w + 2) + boxChars.br;
+  const rows = lines.map((l) => boxChars.v + " " + padRight(l, w) + " " + boxChars.v);
+  return [top, ...rows, bot].join("\n");
+};
+const frameText = (text, ch = "─") => {
+  const w = Math.max(...text.split("\n").map((l) => l.length), 10);
+  const top = ch.repeat(w + 2);
+  const mid = text.split("\n").map((l) => ch + " " + padRight(l, w) + " " + ch).join("\n");
+  return [top, mid, top].join("\n");
+};
+const vlen = (s) => stripAnsi(s).length;
+const bannerFiglet = (text) => {
+  const map = {
+    "A":" ██╗   ██╗ ██████╗ ██████╗ \n ██║   ██║██╔═══██╗██╔══██╗\n  ██║ ██╔╝██║   ██║██████╔╝\n   █████╔╝██║   ██║██╔═══╝ \n    ██╔═╝ ██║   ██║██║     \n   ██║   ╚██████╔╝██████╗ \n   ╚═╝    ╚═════╝ ╚═════╝ ",
+    "B":" ██████╗ ██████╗ \n ██╔══██╗██╔══██╗\n ██████╔╝██████╔╝\n ██╔══██╗██╔═══╝ \n ██║  ██║██████╔╝\n ╚═╝   ╚═╝╚═════╝ ",
+    "C":"  ██████╗\n ██╔════╝\n ██║     \n ██║     \n ╚██████╗\n  ╚═════╝ ",
+    "D":" ██████╗ \n ██╔══██╗\n ██████╔╝\n ██╔══██╗\n ██████╔╝\n ╚═════╝ ",
+    "E":" ██████╗\n ██╔══██╗\n ██████╔╝\n ██╔═══╝ \n ██╔══██╗\n ██████╔╝",
+    "F":" ██████╗\n ██╔══██╗\n ██████╔╝\n ██╔═══╝ \n ██║     \n ██║     ",
+    "G":"  ██████╗\n ██╔═══██╗\n ██║     \n ██║   ██╗\n ╚██████╔╝\n  ╚═════╝ ",
+    "H":" ██╗   ██╗\n ██║   ██║\n ███████║\n ██╔══██║\n ██║  ██║\n ╚═╝   ╚═╝",
+    "I":"  ██████╗\n      ██║\n     ██║\n    ██║\n ██████╔╝\n ╚══════╝ ",
+    "J":"        ██║\n        ██║\n ██╗   ██║\n ██║   ██║\n ╚██████╔╝\n  ╚═════╝ ",
+    "K":" ██╗   ██╗\n ██║   ██║\n ███████║\n ██╔═██╗ \n ██║  ██╗\n ██║   ██╗",
+    "L":" ██╗    \n ██║    \n ██║    \n ██║    \n ███████╗\n ╚══════╝",
+    "M":" ██╗   ██╗ ██╗   ██╗\n ████████║ ████████║\n ██╔════██║ ██╔════██║\n ██║     ██║ ██║     ██║\n ██║     ██║ ███████║\n ╚═╝     ╚═╝ ╚══════╝",
+    "N":" ██╗   ██╗\n ████ ██║\n ██ ████║\n ██╗ ██║\n ██║  ██║\n ╚═╝   ╚═╝",
+    "O":"  ██████╗\n ██╔══██╗\n ███████║\n ██╔══██║\n ██████╔╝\n ╚═════╝ ",
+    "P":" ██████╗ \n ██╔══██╗\n ██████╔╝\n ██╔═══╝ \n ██║     \n ██║     ",
+    "Q":"  ██████╗\n ██╔══██╗\n ███████║\n ██╔══██║\n ██████╔╝\n ╚══════╝ ",
+    "R":" ██████╗ \n ██╔══██╗\n ██████╔╝\n ██╔═██╗ \n ██║  ██╗\n ██║   ██╗",
+    "S":" ███████╗\n ██╔════╝\n  ██████╗\n ╚════██║\n ███████║\n ╚══════╝",
+    "T":" ████████╗\n     ██╔╝\n    ██╔╝\n   ██╔╝\n   ██║\n   ╚═╝",
+    "U":" ██╗   ██╗\n ██║   ██║\n ██║   ██║\n ██║   ██║\n ╚██████╔╝\n  ╚═════╝ ",
+    "V":" ██╗   ██╗\n ██║   ██║\n ██║   ██║\n ╚██╗ ██╔╝\n  ╚████╔╝\n   ╚══╝ ",
+    "W":" ██╗   ██╗ ██╗   ██╗\n ██║   ██║ ██║   ██║\n ██║   ██║ ██║   ██║\n ██║   ██║ ██║   ██║\n ╚██████╔╝╚██████╔╝\n  ╚═════╝ ╚═════╝ ",
+    "X":" ██╗ ██╗\n  ████╔╝\n   ██╔╝\n   ██╔╝\n  ████╗\n ██╗ ██╗",
+    "Y":" ██╗   ██╗\n  █████╔╝\n   ████╔╝\n   ██╔╝\n   ██║\n   ██║",
+    "Z":" ██████╗\n     ╚██╔╝\n    ██╔╝\n   ██╔╝\n  ██████╗"
+  };
+  return text.toUpperCase().split("").map((c) => map[c] || " ? ").join("   ");
+};
+const calendar = (year, month) => {
+  const d = new Date(year, month - 1, 1);
+  const days = new Date(year, month, 0).getDate();
+  const start = d.getDay();
+  const rows = ["Lu Ma Me Je Ve Sa Di"];
+  let line = "   ".repeat(start);
+  for (let i = 1; i <= days; i++) {
+    line += (i < 10 ? " " : "") + i + " ";
+    if ((start + i) % 7 === 0 || i === days) { rows.push(line); line = ""; }
+  }
+  return rows.join("\n");
+};
+const clockAscii = () => {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes();
+  return ["┌─────────┐","│ " + padLeft(h,2) + ":" + padLeft(m,2) + " │","└─────────┘","  " + now.toLocaleTimeString()].join("\n");
+};
+const ruler = (len = 40) => "1234567890" + " ".repeat(len - 10) + "\n" + "----------|" + "-".repeat(len - 10);
+const strikethrough = (t) => t.split("").map((c) => c + "\u0336").join("");
+const underline = (t) => t.split("").map((c) => c + "\u0332").join("");
+const mirror = (t) => t.split("").reverse().join("");
+const flip = (t) => t.split("\n").map((l) => l.split("").reverse().join("")).join("\n");
+
 
 const asciiFiglet = (text) => {
   const map = {
