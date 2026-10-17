@@ -1557,6 +1557,124 @@ async function runTUI(state, updateAvailable) {
           screen.sys(ch.repeat(40));
           return;
         }
+        case "whois": {
+          if (!arg) { screen.sys("Usage : /whois <domaine>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await whoisLookup(arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "dnslookup": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (!parts[0]) { screen.sys("Usage : /dnslookup <domaine> [type]"); return; }
+          screen.sys(parts[0] + " → " + dnsLookup(parts[0], parts[1] || "A"));
+          return;
+        }
+        case "ssl": {
+          if (!arg) { screen.sys("Usage : /ssl <domaine>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await sslInfo(arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "ping-multi": {
+          if (!arg) { screen.sys("Usage : /ping-multi <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await pingMulti(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "extract-emails": {
+          if (!arg) { screen.sys("Usage : /extract-emails <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await extractEmails(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "extract-links": {
+          if (!arg) { screen.sys("Usage : /extract-links <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await extractLinksWeb(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "extract-images": {
+          if (!arg) { screen.sys("Usage : /extract-images <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await extractImages(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "download-info": {
+          if (!arg) { screen.sys("Usage : /download-info <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await downloadInfo(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "favicon": {
+          if (!arg) { screen.sys("Usage : /favicon <domaine>"); return; }
+          screen.sys(faviconUrl(arg));
+          return;
+        }
+        case "robots": {
+          if (!arg) { screen.sys("Usage : /robots <domaine>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await robotsTxt(arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "sitemap": {
+          if (!arg) { screen.sys("Usage : /sitemap <domaine>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await sitemapXml(arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "wp-detect": {
+          if (!arg) { screen.sys("Usage : /wp-detect <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await wpDetect(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "tech-detect": {
+          if (!arg) { screen.sys("Usage : /tech-detect <url>"); return; }
+          screen.busy = true; screen.render();
+          try { screen.sys(await techDetect(arg.startsWith("http") ? arg : "https://" + arg)); } catch (e) { screen.sys("Erreur : " + e.message); }
+          screen.busy = false; screen.render();
+          return;
+        }
+        case "url-encode": {
+          if (!arg) { screen.sys("Usage : /url-encode <texte>"); return; }
+          screen.sys(urlEncode(arg));
+          return;
+        }
+        case "url-decode": {
+          if (!arg) { screen.sys("Usage : /url-decode <texte>"); return; }
+          screen.sys(urlDecode(arg));
+          return;
+        }
+        case "html-encode": {
+          if (!arg) { screen.sys("Usage : /html-encode <texte>"); return; }
+          screen.sys(htmlEncode(arg));
+          return;
+        }
+        case "html-decode": {
+          if (!arg) { screen.sys("Usage : /html-decode <texte>"); return; }
+          screen.sys(htmlDecode(arg));
+          return;
+        }
+        case "jwt-decode": {
+          if (!arg) { screen.sys("Usage : /jwt-decode <token>"); return; }
+          screen.sys(jwtDecode(arg));
+          return;
+        }
+        case "csv-to-json": {
+          if (!arg) { screen.sys("Usage : /csv-to-json <texte CSV>"); return; }
+          screen.sys(csvToJson(arg));
+          return;
+        }
         case "disk": {
           const d = diskUsage(process.cwd());
           screen.sys("Disque : " + Math.round(d.used / 1024 / 1024 / 1024 * 10) / 10 + " Go / " + Math.round(d.total / 1024 / 1024 / 1024 * 10) / 10 + " Go (" + d.pct + "% utilisé)");
