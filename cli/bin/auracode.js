@@ -20,7 +20,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.10" };
+const PKG = { version: "1.4.0.0.11" };
 const DISCORD_CLIENT_ID = "1560983341488930816";
 let discordSock = null;
 let discordReady = false;
@@ -99,7 +99,7 @@ function discordPresence(state, details) {
         state: String(state || "").slice(0, 128),
         details: String(details || "").slice(0, 128),
         timestamps: { start: DISCORD_START },
-        assets: { large_image: "auracode", large_text: "AuraCode by VTH Group" },
+        assets: { large_text: "AuraCode by VTH Group" },
         instance: false
       },
       nonce: String(Date.now())
