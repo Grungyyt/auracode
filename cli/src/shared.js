@@ -5,6 +5,7 @@ const os = require("os");
 const path = require("path");
 const readline = require("readline");
 const crypto = require("crypto");
+const net = require("net");
 const { exec, execSync, spawn } = require("child_process");
 
 const HOME = path.join(os.homedir(), ".auracode");
@@ -12,47 +13,59 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.6" };
+const PKG = { version: "1.4.0.0.7" };
 const DISCORD_CLIENT_ID = "1555989312846168135";
-const WS = typeof WebSocket !== "undefined" ? WebSocket : null;
-let discordWS = null;
+let discordSock = null;
 let discordReady = false;
 let discordPending = [];
 const DISCORD_START = Date.now();
+const DISCORD_PIPE = "\\\\.\\pipe\\discord-ipc-0";
 
-function discordSend(payload) {
-  if (!WS) return;
-  const str = JSON.stringify(payload);
-  if (!discordWS || discordWS.readyState !== WS.OPEN) {
-    discordPending.push(str);
+function discordFrame(obj) {
+  const str = JSON.stringify(obj);
+  const len = Buffer.byteLength(str);
+  const buf = Buffer.alloc(4 + len);
+  buf.writeUInt32LE(len, 0);
+  buf.write(str, 4);
+  return buf;
+}
+
+function discordSendRaw(obj) {
+  if (!discordSock || discordSock.destroyed) {
+    discordPending.push(obj);
     return;
   }
-  try { discordWS.send(str); } catch { /* ignore */ }
+  try { discordSock.write(discordFrame(obj)); } catch { /* ignore */ }
 }
 
 function discordConnect() {
-  if (!WS || discordWS) return;
-  try {
-    discordWS = new WS("wss://remote-discord.com");
-    discordWS.onopen = () => discordSend({ op: 0, d: { client_id: DISCORD_CLIENT_ID, v: 1 } });
-    discordWS.onmessage = (ev) => {
-      try {
-        const m = JSON.parse(ev.data);
-        if (m.op === 1 && m.d && m.d.client_id === DISCORD_CLIENT_ID) {
-          discordReady = true;
-          while (discordPending.length) discordSend(discordPending.shift());
-        }
-      } catch { /* ignore */ }
-    };
-    discordWS.onclose = () => { discordWS = null; discordReady = false; setTimeout(discordConnect, 15000); };
-    discordWS.onerror = () => { /* ignore */ };
-  } catch { /* ignore */ }
+  if (!discordSock) {
+    try {
+      discordSock = net.createConnection(DISCORD_PIPE);
+      discordSock.on("connect", () => discordSendRaw({ v: 1, client_id: DISCORD_CLIENT_ID }));
+      discordSock.on("data", (chunk) => {
+        try {
+          const m = JSON.parse(chunk.toString("utf8", 4));
+          if (m && m.evt === "READY") {
+            discordReady = true;
+            while (discordPending.length) discordSendRaw(discordPending.shift());
+          }
+        } catch { /* ignore */ }
+      });
+      discordSock.on("error", () => { /* ignore */ });
+      discordSock.on("close", () => {
+        discordSock = null;
+        discordReady = false;
+        setTimeout(discordConnect, 15000);
+      });
+    } catch { /* ignore */ }
+  }
 }
 
 function discordPresence(state, details) {
-  discordSend({
-    op: 3,
-    d: {
+  discordSendRaw({
+    cmd: "SET_ACTIVITY",
+    args: {
       pid: process.pid,
       activity: {
         name: "AuraCode",
@@ -68,7 +81,10 @@ function discordPresence(state, details) {
 }
 
 function discordClear() {
-  discordSend({ op: 3, d: { pid: process.pid, activity: null, nonce: String(Date.now()) } });
+  discordSendRaw({
+    cmd: "SET_ACTIVITY",
+    args: { pid: process.pid, activity: null, nonce: String(Date.now()) }
+  });
 }
 
 const ART_LINES = [
