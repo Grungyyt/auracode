@@ -1675,6 +1675,87 @@ async function runTUI(state, updateAvailable) {
           screen.sys(csvToJson(arg));
           return;
         }
+        case "dice": {
+          if (!arg) { screen.sys("Usage : /dice <faces>"); return; }
+          screen.sys("Dé : " + diceRoll(parseInt(arg, 10) || 6));
+          return;
+        }
+        case "coin": {
+          screen.sys(coinFlip());
+          return;
+        }
+        case "rand": {
+          const parts = String(arg).split(/\s+/).filter(Boolean).map(Number);
+          if (parts.length < 2) { screen.sys("Usage : /rand <min> <max>"); return; }
+          screen.sys(randRange(parts[0], parts[1]));
+          return;
+        }
+        case "flip-coin": {
+          screen.sys(coinFlip());
+          return;
+        }
+        case "dice-roll": {
+          screen.sys("Dé : " + diceRoll(6));
+          return;
+        }
+        case "lorem": {
+          const n = parseInt(arg, 10) || 5;
+          screen.sys(lorem(n));
+          return;
+        }
+        case "password": {
+          const len = parseInt(arg, 10) || 16;
+          screen.sys(passwordGen(len));
+          return;
+        }
+        case "color": {
+          screen.sys(randomColor());
+          return;
+        }
+        case "color-hex": {
+          screen.sys(colorName(randomColor()) + " " + randomColor());
+          return;
+        }
+        case "weather": {
+          screen.sys("Météo : données non disponibles (clé API requise)");
+          return;
+        }
+        case "currency": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /currency <montant> <de> <à>"); return; }
+          screen.sys(convertCurrency(parts[0], parts[1], parts[2]));
+          return;
+        }
+        case "conversion": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /conversion <de> <à> <montant>"); return; }
+          screen.sys(convertCurrency(parts[2], parts[0], parts[1]));
+          return;
+        }
+        case "tip": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /tip <montant> <pourcentage>"); return; }
+          screen.sys(tipCalc(parts[0], parts[1]));
+          return;
+        }
+        case "tax": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /tax <montant> <taux>"); return; }
+          screen.sys(taxCalc(parts[0], parts[1]));
+          return;
+        }
+        case "discount": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 2) { screen.sys("Usage : /discount <prix> <réduction>"); return; }
+          screen.sys(discountCalc(parts[0], parts[1]));
+          return;
+        }
+        case "loan": {
+          const parts = String(arg).split(/\s+/).filter(Boolean);
+          if (parts.length < 3) { screen.sys("Usage : /loan <montant> <taux> <mois>"); return; }
+          screen.sys(loanCalc(parts[0], parts[1], parts[2]));
+          return;
+        }
         case "disk": {
           const d = diskUsage(process.cwd());
           screen.sys("Disque : " + Math.round(d.used / 1024 / 1024 / 1024 * 10) / 10 + " Go / " + Math.round(d.total / 1024 / 1024 / 1024 * 10) / 10 + " Go (" + d.pct + "% utilisé)");

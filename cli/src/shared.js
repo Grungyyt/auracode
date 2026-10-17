@@ -15,7 +15,7 @@ const CONFIG_FILE = path.join(HOME, "config.json");
 const SESSIONS_FILE = path.join(HOME, "sessions.json");
 const HIST_FILE = path.join(HOME, "history.json");
 
-const PKG = { version: "1.4.0.0.18" };
+const PKG = { version: "1.4.0.0.19" };
 const DISCORD_CLIENT_ID = "1560995251307552848";
 let discordSock = null;
 let discordReady = false;
@@ -1227,6 +1227,64 @@ const csvToJson = (csv) => {
     return JSON.stringify(out, null, 2);
   } catch { return "CSV invalide"; }
 };
+
+// ---------- Fun / Utilitaires (lot 5/5) ----------
+const diceRoll = (sides = 6) => Math.floor(Math.random() * Math.max(2, sides)) + 1;
+const coinFlip = () => Math.random() < 0.5 ? "Pile" : "Face";
+const randRange = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const lorem = (n = 5) => {
+  const words = ["lorem","ipsum","dolor","sit","amet","consectetur","adipiscing","elit","sed","do","eiusmod","tempor","incididunt","ut","labore","et","dolore","magna","aliqua"];
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(words[Math.floor(Math.random() * words.length)]);
+  return out.join(" ").charAt(0).toUpperCase() + out.join("").slice(1) + ".";
+};
+const randomColor = () => "#" + Math.floor(Math.random()*16777215).toString(16).padStart(6, "0");
+const convertCurrency = (amount, from, to) => {
+  const rates = { USD: 1, EUR: 0.92, GBP: 0.79, JPY: 149.5, CHF: 0.88, CAD: 1.36, AUD: 1.50 };
+  const f = rates[from.toUpperCase()] || 1;
+  const t = rates[to.toUpperCase()] || 1;
+  return ((parseFloat(amount) / f) * t).toFixed(2);
+};
+const tipCalc = (amount, pct) => {
+  const a = parseFloat(amount);
+  const p = parseFloat(pct);
+  const tip = (a * p / 100).toFixed(2);
+  const total = (a + parseFloat(tip)).toFixed(2);
+  return "Pourboire : " + tip + " | Total : " + total;
+};
+const taxCalc = (amount, rate) => {
+  const a = parseFloat(amount);
+  const r = parseFloat(rate);
+  const tax = (a * r / 100).toFixed(2);
+  const total = (a + parseFloat(tax)).toFixed(2);
+  return "Taxe : " + tax + " | Total : " + total;
+};
+const discountCalc = (price, discount) => {
+  const p = parseFloat(price);
+  const d = parseFloat(discount);
+  const disc = (p * d / 100).toFixed(2);
+  const final = (p - parseFloat(disc)).toFixed(2);
+  return "Réduction : " + disc + " | Prix final : " + final;
+};
+const loanCalc = (amount, rate, months) => {
+  const p = parseFloat(amount);
+  const r = parseFloat(rate) / 100 / 12;
+  const n = parseInt(months, 10);
+  if (r === 0) return "Mensualité : " + (p / n).toFixed(2);
+  const m = (p * r) / (1 - Math.pow(1 + r, -n));
+  return "Mensualité : " + m.toFixed(2) + " | Total : " + (m * n).toFixed(2);
+};
+const passwordGen = (len = 16) => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+  let out = "";
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+};
+const colorName = (hex) => {
+  const names = { "#FF0000":"rouge","#00FF00":"vert","#0000FF":"bleu","#FFFF00":"jaune","#FF00FF":"magenta","#00FFFF":"cyan","#FFFFFF":"blanc","#000000":"noir" };
+  return names[hex.toUpperCase()] || hex;
+};
+
 
 
 // ---------- Écran plein terminal ----------
