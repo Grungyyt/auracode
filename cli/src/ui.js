@@ -2,7 +2,7 @@
 // Bundlé : symboles partagés fournis par shared.js (même portée finale).
 
 function adLine(W) {
-  const txt = "✨ Aura 1.1 & Aura 1.1 Code by VTH Group — /model pour choisir !";
+  const txt = "✨ Nous arrivons bientôt — En attendant rendez-vous sur https://ai.vth-mc.fr";
   const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
   return pad + P.bold + P.butter + txt + P.reset;
 }
@@ -226,13 +226,10 @@ async function cmdSetup() {
   if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
   memApiKey = key;
 
-  // 2. Modèle (avec stats visibles)
+  // 2. Modèles retirés — message d'attente
   console.log("");
-  const model = await choose("Étape 2/3 — Choisis ton modèle", [
-    { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
-    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
-  ]);
-  if (!model) { console.log("Annulé."); rl.close(); return; }
+  const model = "aura-1.1";
+  console.log(pastel("lemon", "✨ Nous arrivons bientôt — En attendant rendez-vous sur https://ai.vth-mc.fr"));
 
   // 3. Effort (avec temps et coût visibles)
   console.log("");
@@ -266,7 +263,7 @@ async function cmdSetup() {
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conv" },
-  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.1-code"] },
+  { name: "/model", desc: "Modèles retirés — rdv sur https://ai.vth-mc.fr" },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
   { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono", "opencode"] },
