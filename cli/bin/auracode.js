@@ -2140,6 +2140,16 @@ function brandLine(W) {
 
 const PARTY_COLS = () => [P.pink, P.butter, P.mint, P.aqua, P.lavender, P.lilac, P.lemon, P.coral];
 const PARTY_CH = ["*", "+", "✦", "·", "•", "×"];
+// Couleur RGB pastel animée (HSL → ANSI true color) pour les titres.
+const pastelColor = (deg) => {
+  const h = ((((deg % 360) + 360) % 360) / 360), s = 0.85, l = 0.78;
+  const f = (n) => {
+    const k = (n + h * 12) % 12;
+    const a = s * Math.min(l, 1 - l);
+    return Math.round((l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255);
+  };
+  return `\x1b[38;2;${f(0)};${f(8)};${f(4)}m`;
+};
 const explodeRocket = (r, cols, chs) => {
   const sparks = [];
   const n = 8 + Math.floor(Math.random() * 7);
@@ -2200,8 +2210,12 @@ async function runFireworks(screen, seconds = 7, title = "🎆 Aura 1.3 est là 
         put(p.x, p.y, (p.life < 4 ? P.dim : p.col) + p.ch + P.reset);
       }
       const ti = Math.floor(W / 2 - title.length / 2);
+      const frame = Math.floor((Date.now() - t0) / 110);
       for (let i = 0; i < title.length && ti + i < W; i++) {
-        if (ti + i >= 0) grid[Math.floor(H / 2)][ti + i] = P.bold + P.butter + title[i] + P.reset;
+        if (ti + i < 0) continue;
+        // Texte RGB pastel : chaque lettre a sa teinte, qui glisse à chaque frame.
+        const col = pastelColor((i / Math.max(1, title.length)) * 360 + frame * 40);
+        grid[Math.floor(H / 2)][ti + i] = P.bold + col + title[i] + P.reset;
       }
       process.stdout.write("\x1b[H" + grid.map((row) => row.join("")).join("\n"));
       await sleep(110);
@@ -5416,13 +5430,14 @@ async function main() {
     return;
   }
   // Tous les modèles ont été retirés (transition) : le chat est suspendu,
-  // les utilisateurs sont redirigés vers le site web.
+  // écran d'attente (feux d'artifice + texte RGB pastel animé).
+  await runFireworks(null, 12, "✨ Nous arrivons bientôt ✨");
+  process.stdout.write("\x1b[2J\x1b[H");
   console.log("");
-  console.log("✨  Nous arrivons bientôt !");
+  console.log(P.bold + pastel("butter", "✨  Nous arrivons bientôt ...") + P.reset);
   console.log("");
-  console.log("En attendant, rendez-vous sur https://ai.vth-mc.fr");
+  console.log(pastel("mint", "En attendant, rendez-vous sur https://ai.vth-mc.fr"));
   console.log("");
-  openBrowser("https://ai.vth-mc.fr");
   return;
 
   purgeStoredSecrets();

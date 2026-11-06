@@ -2086,13 +2086,14 @@ async function main() {
     return;
   }
   // Tous les modèles ont été retirés (transition) : le chat est suspendu,
-  // les utilisateurs sont redirigés vers le site web.
+  // écran d'attente (feux d'artifice + texte RGB pastel animé).
+  await runFireworks(null, 12, "✨ Nous arrivons bientôt ✨");
+  process.stdout.write("\x1b[2J\x1b[H");
   console.log("");
-  console.log("✨  Nous arrivons bientôt !");
+  console.log(P.bold + pastel("butter", "✨  Nous arrivons bientôt ...") + P.reset);
   console.log("");
-  console.log("En attendant, rendez-vous sur https://ai.vth-mc.fr");
+  console.log(pastel("mint", "En attendant, rendez-vous sur https://ai.vth-mc.fr"));
   console.log("");
-  openBrowser("https://ai.vth-mc.fr");
   return;
 
   purgeStoredSecrets();
