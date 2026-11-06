@@ -42,7 +42,7 @@ async function runTUI(state, updateAvailable) {
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.slice(1).split(" ");
       const arg = rest.join(" ").trim();
-      const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code", "aura-2"];
+      const MODELS = ["aura-1.1", "aura-1.1-code"];
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
       const saveCfg = () => {
@@ -85,15 +85,6 @@ async function runTUI(state, updateAvailable) {
             return;
           }
           if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
-          if ((arg === "aura-1.3" || arg === "aura-2") && !state.sandbox && (arg === "aura-2" || aura13Locked())) {
-            showUnavailable(screen, arg);
-            if (arg === "aura-1.3") {
-              screen.sys("Ouverture de la page d'attente...");
-              openBrowser(AURA13_WAIT_URL);
-              screen.render();
-            }
-            return;
-          }
           state.model = arg; saveCfg();
           discordPresence(arg, state.effort);
           screen.sys("Modèle : " + arg);
@@ -140,29 +131,8 @@ async function runTUI(state, updateAvailable) {
           return;
         }
         case "image13": {
-          if (!arg) { screen.sys("Usage : /image13 <description>  (Aura 1.3 Image, grand format)"); return; }
-          if (aura13Locked() && !state.sandbox) {
-            screen.sys(`🔒 Aura 1.3 Image dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
-            openBrowser(AURA13_WAIT_URL);
-            screen.render();
-            return;
-          }
-          let sid = getSessionId();
-          screen.busy = true;
-          try {
-            if (!sid) sid = await newSession(state.key, state.model);
-            screen.sys("Génération de l'image 1.3 (grand format, coût x3)...");
-            const d = await api("/api/image", { prompt: arg, session_id: sid, model: "aura-1.3-image" }, state.key);
-            screen.assistant(`![image](${d.image_url})`);
-            await screen.refreshQuota();
-          } catch (e) {
-            const ed = e.data || {};
-            if (/aura 1\.3/i.test(String(ed.error || ""))) {
-              screen.sys(`🔒 Aura 1.3 Image dans ${aura13Countdown()} (${AURA13_LAUNCH_LABEL})`);
-              openBrowser(AURA13_WAIT_URL);
-            } else screen.sys("Erreur : " + e.message);
-          }
-          screen.busy = false;
+          if (!arg) { screen.sys("Usage : /image13 <description>"); return; }
+          screen.sys("Aura 1.3 Image n'est plus disponible sur le serveur. Utilise /image à la place.");
           screen.render();
           return;
         }
@@ -1287,7 +1257,7 @@ async function runTUI(state, updateAvailable) {
           screen.sys("Discord RPC : " + (st.connected ? "connecté au pipe " + st.pipe : "déconnecté"));
           screen.sys("Discord RPC : " + (st.ready ? "READY (présence active)" : "pas de READY (Discord fermé ou appli invalide)"));
           screen.sys("Application ID : " + st.clientId);
-          screen.sys("Tape /model aura-1.2 pour envoyer la présence.");
+          screen.sys("Tape /model aura-1.1-code pour envoyer la présence.");
           screen.render();
           return;
         }
@@ -1911,14 +1881,14 @@ async function runTUI(state, updateAvailable) {
           try {
             let sid = getSessionId();
             if (!sid) sid = await newSession(state.key, state.model);
-            screen.sys("J'interroge aura-1.1 et aura-1.2...");
+            screen.sys("J'interroge aura-1.1 et aura-1.1-code...");
             const [a, b] = await Promise.all([
               api("/api/chat", { message: arg, session_id: sid, model: "aura-1.1", effort: "middle" }, state.key),
-              api("/api/chat", { message: arg, session_id: sid, model: "aura-1.2", effort: "middle" }, state.key),
+              api("/api/chat", { message: arg, session_id: sid, model: "aura-1.1-code", effort: "middle" }, state.key),
             ]);
             screen.sys("— aura-1.1 :");
             screen.assistant(String(a.reply || "").trim());
-            screen.sys("— aura-1.2 :");
+            screen.sys("— aura-1.1-code :");
             screen.assistant(String(b.reply || "").trim());
             await screen.refreshQuota();
           } catch (e) { screen.sys("Erreur : " + e.message); }
@@ -2122,7 +2092,7 @@ async function main() {
   if (args.includes("--version") || args.includes("-v")) { console.log(`${PKG.version} (build ${buildId()})`); return; }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
-  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code, aura-2)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
   auracode --sandbox       Sandbox admin Aura 1.3 (nouveau terminal via /admin-sandbox)
   Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /admin-sandbox /reach /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
@@ -2132,7 +2102,7 @@ async function main() {
   let model = "aura-1.1-code", effort = "high", lang = "fr";
   try {
     const saved = loadJson(CONFIG_FILE, {});
-    if (saved.model) model = saved.model;
+    if (saved.model && ["aura-1.1", "aura-1.1-code"].includes(saved.model)) model = saved.model;
     if (saved.effort) effort = saved.effort;
     if (saved.lang) lang = saved.lang;
   } catch { /* config absente, défauts */ }
@@ -2248,7 +2218,7 @@ async function main() {
         if (list.length) {
           const s = list[list.length - 1];
           setSessionId(s.session_id);
-          if (s.model) model = s.model;
+          if (s.model && ["aura-1.1", "aura-1.1-code"].includes(s.model)) model = s.model;
           synced = true;
         }
       } catch { /* ignore */ }
@@ -2274,7 +2244,7 @@ async function main() {
   console.log(`Modèle ${pastel("lemon", model)} • effort ${pastel("lemon", effort)} • dossier ${process.cwd()}`);
   console.log("Écris ta demande (exit pour quitter, /help pour les commandes).\n");
 
-  const MODELS = ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code"];
+  const MODELS = ["aura-1.1", "aura-1.1-code"];
   const EFFORTS = ["low", "middle", "high", "xhigh"];
   const saveCfg = (patch) => {
     const cfg = loadJson(CONFIG_FILE, {});
@@ -2292,7 +2262,7 @@ async function main() {
       console.log(`
 Commandes :
   /new              Nouvelle conversation
-  /model [X]        Voir/Changer de modèle (aura-1.1, aura-1.2, aura-1.3, aura-1.1-code)
+  /model [X]        Voir/Changer de modèle (aura-1.1, aura-1.1-code)
   /effort [X]       Voir/Changer l'effort (low, middle, high, xhigh)
   /quota            Afficher ton quota global
   /image <texte>    Générer une image
@@ -2310,8 +2280,6 @@ Commandes :
       if (!arg) {
         const m = await choose("Choisis ton modèle", [
           { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1" },
-          { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4" },
-          { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6" },
           { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2" },
         ]);
         if (m) { model = m; saveCfg({ model: m }); console.log("Modèle : " + pastel("lemon", model)); }

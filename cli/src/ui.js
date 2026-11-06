@@ -2,7 +2,7 @@
 // Bundlé : symboles partagés fournis par shared.js (même portée finale).
 
 function adLine(W) {
-  const txt = aura13Locked() ? `✨ Aura 1.3 by VTH Groupdans ${aura13Countdown()} — ${AURA13_LAUNCH_LABEL}` : "✨ Aura 1.3 by VTH Group est là — /model aura-1.3 !";
+  const txt = "✨ Aura 1.1 & Aura 1.1 Code by VTH Group — /model pour choisir !";
   const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
   return pad + P.bold + P.butter + txt + P.reset;
 }
@@ -230,8 +230,6 @@ async function cmdSetup() {
   console.log("");
   const model = await choose("Étape 2/3 — Choisis ton modèle", [
     { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
-    { value: "aura-1.2", label: "Aura 1.2", desc: "7B • ~8 mots/s • coût x4 • le plus malin" },
-    { value: "aura-1.3", label: "Aura 1.3", desc: "14B • ~3 mots/s • coût x6 • flagship (10 Go RAM) • 🔒 dim. 18 oct. 17h" },
     { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
   ]);
   if (!model) { console.log("Annulé."); rl.close(); return; }
@@ -268,7 +266,7 @@ async function cmdSetup() {
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conv" },
-  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.2", "aura-1.3", "aura-1.1-code", "aura-2"] },
+  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
   { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono", "opencode"] },
