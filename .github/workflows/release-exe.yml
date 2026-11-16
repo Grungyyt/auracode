@@ -26,7 +26,8 @@ jobs:
       - name: Verifie le .exe (refuse un binaire non fusionne)
         shell: pwsh
         run: |
-          $o = & .\cli\dist\auracode.exe --help
+          $o = (& .\cli\dist\auracode.exe --help 2>&1 | Out-String)
+          Write-Host $o
           if ($o -notmatch "AuraCode") { throw "exe invalide : blob non fusionne" }
       - name: Publie la release GitHub
         shell: pwsh
