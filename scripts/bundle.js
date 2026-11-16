@@ -8,6 +8,10 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..", "cli");
 const PARTS = ["shared.js", "backend.js", "ui.js", "main.js"];
 
+// Version unique : cli/package.json. Injectée dans le bundle (PKG) pour que
+// bin/auracode.js et build-exe.js soient toujours synchronisés.
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+
 const BANNER = [
   "#!/usr/bin/env node",
   "/* AuraCode — agent terminal connecté au cloud VTH (api.ia.vth-mc.fr).",
@@ -21,7 +25,10 @@ const BANNER = [
 
 let out = BANNER;
 for (const p of PARTS) {
-  const src = fs.readFileSync(path.join(ROOT, "src", p), "utf8").replace(/\s+$/, "");
+  let src = fs.readFileSync(path.join(ROOT, "src", p), "utf8").replace(/\s+$/, "");
+  if (p === "shared.js") {
+    src = src.replace(/const PKG = \{ version: "[^"]*" \};/, `const PKG = { version: "${pkg.version}" };`);
+  }
   if (!src) throw new Error("morceau vide : " + p);
   out += src + "\n";
 }
