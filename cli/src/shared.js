@@ -493,6 +493,39 @@ const P = {
   bold: "\x1b[1m",
 };
 const pastel = (color, s) => P[color] + s + P.reset;
+
+// ---------- Health check auth.vth-mc.fr (séquence animée au lancement) ----------
+// Chaque composant est affiché un par un toutes les 0,5 s (sauf "supabase").
+const HEALTH_URL = "https://auth.vth-mc.fr/health";
+const HEALTH_SKIP = ["supabase"];
+
+async function runHealthSequence(sys) {
+  const say = sys || ((t) => console.log(t));
+  say(pastel("dim", "◆ Vérification des services VTH (auth.vth-mc.fr)…"));
+  let checks = null;
+  try {
+    const r = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(8000) });
+    const d = await r.json();
+    if (d && d.ok && Array.isArray(d.checks)) checks = d.checks;
+  } catch { checks = null; }
+  if (!checks) {
+    say(pastel("coral", "  ✗ auth.vth-mc.fr injoignable — la connexion peut ne pas fonctionner."));
+    return false;
+  }
+  let allOk = true;
+  for (const c of checks) {
+    if (HEALTH_SKIP.includes(c.name)) continue;
+    await sleep(500);
+    say(c.ok ? pastel("mint", "  ✓ " + c.name) : pastel("coral", "  ✗ " + c.name + " — en panne"));
+    if (!c.ok) allOk = false;
+  }
+  await sleep(500);
+  say(allOk
+    ? pastel("mint", "  ✓ Services VTH opérationnels")
+    : pastel("coral", "  ✗ Certains services VTH sont dégradés"));
+  return allOk;
+}
+
 function pastelBox(title, lines) {
   const width = 58;
   const bar = P.lavender + "─".repeat(width) + P.reset;

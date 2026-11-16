@@ -2123,14 +2123,19 @@ async function main() {
   if (args[0] === "login") {
     console.log("Connexion via VTH Auth (navigateur)...\n");
     const ok = await cmdLoginOAuth();
-    if (ok) { console.log("Connecté ✓ (compte VTH lié, conversations synchronisées avec le web)"); return; }
+    if (ok) {
+      console.log("Connecté ✓ (compte VTH lié, conversations synchronisées avec le web)");
+      try { await runHealthSequence(); } catch { /* silencieux */ }
+      return;
+    }
     console.log("Navigateur indisponible ou délai dépassé — colle une clé ak-vth-... :");
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question("Colle ta clé API : ", (k) => {
+    rl.question("Colle ta clé API : ", async (k) => {
       k = k.trim();
       if (!k) { console.log("Clé vide, annulé."); rl.close(); return; }
       memApiKey = k;
       console.log("Connecté ✓ (clé gardée en mémoire seule — login à refaire au prochain lancement)");
+      try { await runHealthSequence(); } catch { /* silencieux */ }
       rl.close();
     });
     return;
@@ -2207,6 +2212,8 @@ async function main() {
       if (!key) return;
     }
   }
+  // Diagnostic des services VTH au lancement (0,5 s par composant, supabase ignoré).
+  try { await runHealthSequence(); } catch { /* silencieux */ }
   try {
     if (!getSessionId()) {
       // Sync inter-comptes : reprend la dernière conversation du serveur (web ↔ CLI
