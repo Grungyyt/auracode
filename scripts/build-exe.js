@@ -8,8 +8,8 @@ const ROOT = path.join(__dirname, "..", "cli");
 const pkg = require(path.join(ROOT, "package.json"));
 
 // Sentinel complet attendu dans le node.exe choisi (fuse SEA, présent dans
-// les builds officiels Node 18-20, retiré des builds récents).
-const SEA_SENTINEL = "NODE_SEA_FUSE_fce680ab2cc467b6e840d43aa3013196";
+// les builds officiels Node — voir nodejs.org single-executable-applications).
+const SEA_SENTINEL = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 
 // Garde-fou : version synchronisée entre package.json et le binaire.
 const binSrc = fs.readFileSync(path.join(ROOT, "bin", "auracode.js"), "utf8");
@@ -72,7 +72,7 @@ if (!binBuf.includes(Buffer.from(SEA_SENTINEL, "utf8"))) {
   );
 }
 execSync(
-  `npx --yes postject ${exePath} NODE_SEA_BLOB ${path.join(dist, "sea-prep.blob")} --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e840d43aa3013196`,
+  `npx --yes postject ${exePath} NODE_SEA_BLOB ${path.join(dist, "sea-prep.blob")} --sentinel-fuse ${SEA_SENTINEL}`,
   { stdio: "inherit" }
 );
 console.log("OK: " + path.join(dist, "auracode.exe"));
