@@ -7,6 +7,10 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..", "cli");
 const pkg = require(path.join(ROOT, "package.json"));
 
+// Sentinel complet attendu dans le node.exe choisi (fuse SEA, présent dans
+// les builds officiels Node 18-20, retiré des builds récents).
+const SEA_SENTINEL = "NODE_SEA_FUSE_fce680ab2cc467b6e840d43aa3013196";
+
 // Garde-fou : version synchronisée entre package.json et le binaire.
 const binSrc = fs.readFileSync(path.join(ROOT, "bin", "auracode.js"), "utf8");
 if (!binSrc.includes(`version: "${pkg.version}"`)) {
@@ -27,20 +31,23 @@ function findRealNode() {
     out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).forEach((p) => cands.add(p));
   } catch { /* ignore */ }
   cands.add("C:\\Program Files\\nodejs\\node.exe");
-  let best = null;
+  let fallback = null;
   for (const p of cands) {
     try {
       const st = fs.statSync(p);
-      if (st.isFile() && st.size > 50 * 1024 * 1024 && (!best || st.size > best.size)) {
-        best = { path: p, size: st.size };
+      if (!st.isFile() || st.size <= 50 * 1024 * 1024) continue;
+      if (fs.readFileSync(p).includes(SEA_SENTINEL)) {
+        console.log(`node.exe avec fuse SEA : ${p} (${(st.size / 1048576).toFixed(0)} Mo)`);
+        return p;
       }
+      if (!fallback) fallback = { path: p, size: st.size };
     } catch { /* ignore */ }
   }
-  if (!best) {
+  if (!fallback) {
     throw new Error("node.exe réel introuvable (que des shims). Réinstalle Node via nodejs.org.");
   }
-  console.log(`node.exe réel : ${best.path} (${(best.size / 1048576).toFixed(0)} Mo)`);
-  return best.path;
+  console.log(`attention : aucun node.exe avec fuse SEA, on tente ${fallback.path}`);
+  return fallback.path;
 }
 
 fs.writeFileSync(
@@ -54,12 +61,13 @@ fs.writeFileSync(
 execSync("node --experimental-sea-config sea-config.json", { cwd: ROOT, stdio: "inherit" });
 const exePath = path.join(dist, "auracode.exe");
 fs.copyFileSync(findRealNode(), exePath);
-// Garde-fou : si le binaire ne contient pas le sentinel, postject échouera.
-// (ex: Node 24 local). Dans ce cas, laisse la CI construire avec Node 20.
+// Garde-fou : si le binaire ne contient pas le sentinel complet, postject échouera.
+// (ex: Node 24 local — le fuse a été retiré des builds récents). Dans ce cas,
+// laisse la CI construire le .exe avec Node 20 (setup-node).
 const binBuf = fs.readFileSync(exePath);
-if (!binBuf.includes(Buffer.from("NODE_SEA_FUSE", "utf8"))) {
+if (!binBuf.includes(Buffer.from(SEA_SENTINEL, "utf8"))) {
   throw new Error(
-    "Ce node.exe ne contient pas le sentinel SEA. " +
+    "Ce node.exe ne contient pas le sentinel SEA complet. " +
     "Pousse le tag et laisse la CI construire le .exe avec Node 20."
   );
 }
