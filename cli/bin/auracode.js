@@ -2127,7 +2127,7 @@ async function cmdUninstall() {
 // Bundlé : symboles partagés fournis par shared.js (même portée finale).
 
 function adLine(W) {
-  const txt = "✨ Nous arrivons bientôt — En attendant rendez-vous sur https://ai.vth-mc.fr";
+  const txt = "✨ Aura 1.1 & Aura 1.1 Code by VTH Group — /model pour choisir !";
   const pad = " ".repeat(Math.max(0, Math.floor((W - txt.length) / 2)));
   return pad + P.bold + P.butter + txt + P.reset;
 }
@@ -2365,10 +2365,13 @@ async function cmdSetup() {
   if (!key) { console.log(pastel("pink", "Clé vide, installation annulée.")); rl.close(); return; }
   memApiKey = key;
 
-  // 2. Modèles retirés — message d'attente
+  // 2. Modèle (avec stats visibles)
   console.log("");
-  const model = "aura-1.1";
-  console.log(pastel("lemon", "✨ Nous arrivons bientôt — En attendant rendez-vous sur https://ai.vth-mc.fr"));
+  const model = await choose("Étape 2/3 — Choisis ton modèle", [
+    { value: "aura-1.1", label: "Aura 1.1", desc: "1.5B • ~30 mots/s • coût x1 • quotidien" },
+    { value: "aura-1.1-code", label: "Aura 1.1 Code", desc: "3B code • ~20 mots/s • coût x2 • programmation" },
+  ]);
+  if (!model) { console.log("Annulé."); rl.close(); return; }
 
   // 3. Effort (avec temps et coût visibles)
   console.log("");
@@ -2402,7 +2405,7 @@ async function cmdSetup() {
 // ---------- Commandes slash (avec autocomplétion) ----------
 const COMMANDS = [
   { name: "/new", desc: "Nouvelle conv" },
-  { name: "/model", desc: "Modèles retirés — rdv sur https://ai.vth-mc.fr" },
+  { name: "/model", desc: "Voir / changer de modèle", values: ["aura-1.1", "aura-1.1-code"] },
   { name: "/effort", desc: "Voir / changer l'effort", values: ["low", "middle", "high", "xhigh"] },
   { name: "/lang", desc: "Langue des réponses", values: ["fr", "en"] },
   { name: "/theme", desc: "Thème de couleur", values: ["pastel", "sunset", "ocean", "mono", "opencode"] },
@@ -3386,6 +3389,7 @@ async function runTUI(state, updateAvailable) {
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.slice(1).split(" ");
       const arg = rest.join(" ").trim();
+      const MODELS = ["aura-1.1", "aura-1.1-code"];
       const EFFORTS = ["low", "middle", "high", "xhigh"];
       const LANGS = ["fr", "en"];
       const saveCfg = () => {
@@ -3418,7 +3422,19 @@ async function runTUI(state, updateAvailable) {
           } catch (e) { screen.sys("Erreur : " + e.message); }
           return;
         case "model":
-          screen.sys("Nous arrivons bientôt — En attendant rendez-vous sur https://ai.vth-mc.fr");
+          if (!arg) {
+            pickModal("Modèle", MODELS, state.model, (v) => {
+              state.model = v; saveCfg();
+              discordPresence(v, state.effort);
+              screen.sys("Modèle : " + v);
+              screen.render();
+            });
+            return;
+          }
+          if (!MODELS.includes(arg)) { screen.sys("Modèle inconnu. Valides : " + MODELS.join(", ")); return; }
+          state.model = arg; saveCfg();
+          discordPresence(arg, state.effort);
+          screen.sys("Modèle : " + arg);
           screen.render();
           return;
         case "effort":
@@ -5422,24 +5438,13 @@ async function main() {
   let args = process.argv.slice(2);
   if (args.includes("--version") || args.includes("-v")) { console.log(`${PKG.version} (build ${buildId()})`); return; }
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`AuraCode v${PKG.version}\n\n✨ Nous arrivons bientôt — En attendant rendez-vous sur https://ai.vth-mc.fr\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
-  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
+    console.log(`AuraCode v${PKG.version}\n\nUsage:\n  auracode              Démarre l'assistant (intro + chat)\n  auracode setup          Écran d'installation pastel (clé, modèle, effort)\n  auracode login          Connexion VTH (navigateur localhost:3000)\n  auracode logout         Oublie la clé\n  auracode new            Nouvelle conversation\n  auracode update         Met à jour le .exe (Windows)
+  auracode uninstall      Désinstalle (confirmation, tokens effacés)\n  auracode --model X      Modèle (aura-1.1, aura-1.1-code)\n  auracode --effort X     Effort (low, middle, high, xhigh)\n  auracode "question"       Réponse unique sans ouvrir l'interface
   auracode -p "question" [--output-format=json]  Réponse directe scriptable (pipe/CI)
   auracode --sandbox       Sandbox admin Aura 1.3 (nouveau terminal via /admin-sandbox)
   Plein écran : /new /model /effort /lang /sessions /conv /resume /retry /bash /read /run /write /mkdir /touch /init /rewind /cost /skill /auto /permissions /admin-stats /admin-sandbox /reach /doctor /stats /quota /image /copy /export /theme /update /clear /help (/tape /help pour tout voir, !cmd = shell direct, Ctrl+O = switch conv)\n`);
     return;
   }
-  // Tous les modèles ont été retirés (transition) : le chat est suspendu,
-  // écran d'attente (feux d'artifice + texte RGB pastel animé).
-  await runFireworks(null, 12, "✨ Nous arrivons bientôt ✨");
-  process.stdout.write("\x1b[2J\x1b[H");
-  console.log("");
-  console.log(P.bold + pastel("butter", "✨  Nous arrivons bientôt ...") + P.reset);
-  console.log("");
-  console.log(pastel("mint", "En attendant, rendez-vous sur https://ai.vth-mc.fr"));
-  console.log("");
-  return;
-
   purgeStoredSecrets();
   let model = "aura-1.1-code", effort = "high", lang = "fr";
   try {

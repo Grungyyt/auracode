@@ -9,3 +9,5 @@ cli/sea-config.json
 *.p12
 *.pfx
 secrets.json
+
+app/
