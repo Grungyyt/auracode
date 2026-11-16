@@ -16,19 +16,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Vérifie version package.json = tag
+      - name: Verifie version package.json = tag
         shell: pwsh
         run: |
           $pkg = (Get-Content cli/package.json -Raw | ConvertFrom-Json).version
           $tag = "${{ github.ref_name }}".TrimStart("v")
-          if ($pkg -ne $tag) { Write-Error "package.json ($pkg) ≠ tag (${{ github.ref_name }}). Aligne la version avant de tagger."; exit 1 }
+          if ($pkg -ne $tag) { Write-Error "package.json ($pkg) != tag (${{ github.ref_name }}). Aligne la version avant de tagger."; exit 1 }
       - run: node scripts/build-exe.js
-      - name: Vérifie le .exe (refuse un binaire non fusionné)
+      - name: Verifie le .exe (refuse un binaire non fusionne)
         shell: pwsh
         run: |
           $o = & .\cli\dist\auracode.exe --help
-          if ($o -notmatch "AuraCode") { throw "exe invalide : blob non fusionné" }
-      - name: Publie la release (idempotent : crée ou remplace l'asset)
+          if ($o -notmatch "AuraCode") { throw "exe invalide : blob non fusionne" }
+      - name: Publie la release GitHub
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
